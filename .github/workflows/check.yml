@@ -1,7 +1,9 @@
 name: Check kit
 
 # Lints the kit and runs both installers for real in a throwaway home folder, so a broken
-# install is caught here instead of on someone's machine.
+# install is caught here instead of on someone's machine. The tests/install-smoke.* scripts
+# also drive the failure paths: conflicts, a bad code-structure hash, a failed download,
+# restore with no backup.
 
 on:
   push:
@@ -28,10 +30,11 @@ jobs:
       - name: Lint the kit
         run: node scripts/check-kit.mjs
       - name: Shell syntax
-        run: bash -n install.sh
+        run: bash -n install.sh && bash -n tests/install-smoke.sh
       - name: Install for every tool into a temp home
         run: |
-          export HOME="$(mktemp -d)"
+          HOME="$(mktemp -d)"
+          export HOME
           ./install.sh --tool all --rules
           ./install.sh --tool codex --rules          # second run must back up, not clobber
           for d in .claude/skills .agents/skills .gemini/config/skills .gemini/antigravity-cli/skills; do
@@ -40,25 +43,69 @@ jobs:
             done
           done
           test -d "$HOME/.agents/skills-backup" || { echo "rerun did not back up"; exit 1; }
-          ! ls "$HOME/.agents/skills" | grep -q backup || { echo "backup leaked into skills folder"; exit 1; }
+          if find "$HOME/.agents/skills" -maxdepth 1 -name '*backup*' | grep -q .; then echo "backup leaked into skills folder"; exit 1; fi
           grep -q "agentic-framework-kit: global rules" "$HOME/.codex/AGENTS.md"
+      - name: Installer options and failure paths (bash)
+        run: bash tests/install-smoke.sh
+      - name: Node tests
+        run: node --test "tests/*.test.mjs"
+      # The benchmark's numbers mean nothing if a planted bug is not really a bug: every case must
+      # pass its own tests, fail its proof test, and pass the proof after the reference fix.
+      - name: Benchmark answer key still proven
+        run: |
+          (cd examples/demo-notes-api && npm test)
+          node examples/benchmark/bench.mjs verify-key
+          node examples/benchmark/bench.mjs score
 
   install-powershell:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
       - name: Install for every tool into a temp home (PowerShell 7)
         shell: pwsh
         run: |
           $h = Join-Path $env:RUNNER_TEMP 'home'
           ./install.ps1 -Tool all -Rules -HomeDir $h
+          if ($LASTEXITCODE -ne 0) { throw "install exited $LASTEXITCODE" }
           foreach ($s in 'brewedops-app','greploop','scanloop','ship','code-structure') {
             if (-not (Test-Path (Join-Path $h ".agents\skills\$s\SKILL.md"))) { throw "missing $s" }
           }
+      - name: Installer options and failure paths (PowerShell 7)
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/install-smoke.ps1
       - name: Same on Windows PowerShell 5.1
         shell: powershell
         run: |
           $h = Join-Path $env:RUNNER_TEMP 'home51'
           ./install.ps1 -Tool claude -Rules -NoCodeStructure -HomeDir $h
+          if ($LASTEXITCODE -ne 0) { throw "install exited $LASTEXITCODE" }
           if (-not (Test-Path (Join-Path $h '.claude\skills\greploop\SKILL.md'))) { throw 'missing greploop' }
+      - name: Installer options and failure paths (Windows PowerShell 5.1)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/install-smoke.ps1
+      - name: Node tests
+        shell: pwsh
+        run: node --test "tests/*.test.mjs"
+
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ACTIONLINT_VERSION: 1.7.12   # pinned; bump on purpose
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install actionlint (pinned release, checksum verified)
+        run: |
+          base="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfLO "$base/$tarball"
+          curl -sSfLO "$base/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          sha256sum --check --ignore-missing "actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          tar -xzf "$tarball" actionlint
+          ./actionlint -version
+      - name: Lint every workflow, including the ship templates
+        run: ./actionlint -color .github/workflows/*.yml .agents/skills/ship/assets/*.yml

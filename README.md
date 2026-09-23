@@ -13,7 +13,7 @@ before the next one starts. Nothing goes live until you say so.
 | Skill | What it does |
 |---|---|
 | `brewedops-app` | Sets up a new project: asks what it is for, picks a stack, adds CI, writes the project rules |
-| `greploop` | Three AI reviewers score each change out of 5; the AI fixes and re-checks until 5/5 |
+| `greploop` | AI reviewers check each change (one for small low-risk changes, three for the rest); the AI fixes and re-checks until no blocking or major issue is left, then reports what ran and what was not covered |
 | `scanloop` | Free local scan for leaked secrets, risky code and vulnerable packages |
 | `ship` | CI on every push, plus a careful deploy checklist: back up first, prove it is live |
 | `code-structure` | Keeps one clean version of each thing - see below (by [Michael Shimeles](https://github.com/michaelshimeles/skills), fetched from his repo) |
@@ -21,8 +21,12 @@ before the next one starts. Nothing goes live until you say so.
 Plus a starter **global rules file** (the rulebook your AI reads every session) and a
 **project rules template** (AGENTS.md) that keeps the loop on in every project.
 
-**See it work first:** [`examples/`](examples/) has a real greploop run on a small demo
-project - the diff, what the reviewers found, the fixes, and the score going to 5/5.
+**See it work first:** [`examples/benchmark/`](examples/benchmark/) is a small, repeatable test: 8
+changes to a demo API, 6 with a proven planted bug. One reviewer and the three-reviewer panel both
+caught 6 of 6 with no false alarms - and both found a real bug in a change that was supposed to be
+clean. Read its limits before quoting it. [`examples/greploop-run/`](examples/greploop-run/) is one full
+run, every command and its output, from the first review to the final report. What has and has not been tested, per AI tool and OS:
+[COMPATIBILITY.md](COMPATIBILITY.md).
 
 ### About code-structure
 
@@ -62,8 +66,17 @@ cd agentic-framework-kit
 ```
 
 `--tool` takes `claude`, `codex`, `cursor`, `gemini`, `copilot`, `antigravity`, a list like
-`claude,cursor`, or `all`. Existing skills are backed up before being replaced, and an existing
-rules file is never overwritten.
+`claude,cursor`, or `all`. Skills the kit installed before are backed up before being replaced. A
+same-named skill the kit did NOT install (your own) stops the install with nothing changed - rerun with
+`--force` to back it up and replace it. An existing rules file is never overwritten.
+
+**Only one project, or only some skills:**
+```bash
+./install.sh --tool codex --project ~/code/my-app     # into my-app/.agents/skills, nothing global
+./install.sh --tool claude --skills greploop,ship     # just these two
+```
+Project mode writes no global rules (the project's AGENTS.md is the rules file), keeps its backups out
+of git, and lets teammates get the skills by committing `.agents/skills/`.
 
 | Tool | Skills go to | Global rules file |
 |---|---|---|
@@ -81,11 +94,14 @@ Then start a new session in your tool, open an empty folder, and say **"brewedop
 ```bash
 git pull && ./install.sh --tool codex        # update: rerun the same install
 ./install.sh --version                       # the kit's version (installed one: ~/.agents/agentic-framework-kit.installed)
+./install.sh --tool codex --restore          # undo the last install or update; run again to swap back
 ./install.sh --tool codex --uninstall        # remove the kit's skills
 ```
-PowerShell: the same with `-Tool`, `-Uninstall`. Replaced or removed skills are moved to a
-`<skills folder>-backup/` folder, never deleted outright; the newest 3 backup sets are kept.
-Uninstall never touches your rules file. What changed between versions: [CHANGELOG.md](CHANGELOG.md).
+PowerShell: the same with `-Tool`, `-Version`, `-Restore`, `-Uninstall`, `-Project`, `-Skills`,
+`-Force`. Replaced or removed skills are moved to a `<skills folder>-backup/` folder, never deleted
+outright; the newest 3 backup sets are kept. Uninstall never touches your rules file. The installer
+exits non-zero when it stops on a conflict, when code-structure fails its hash check or download (the
+kit's own skills are still installed), or when there is nothing to restore. What changed between versions: [CHANGELOG.md](CHANGELOG.md).
 
 ## Also install (the skills use these)
 
