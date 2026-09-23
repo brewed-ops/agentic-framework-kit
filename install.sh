@@ -28,7 +28,7 @@ RECORD="agentic-framework-kit.installed"
 # change upstream never reaches users without a kit release. Bump all three together.
 CS_REPO="https://github.com/michaelshimeles/skills"
 CS_COMMIT="4b72f46b045e6fef52e6a98d4c162dd309826aed"
-CS_SHA256="2f0ed408b525c65d422699490a159584fd977d0cfca5b15a5c9a47cf07b95f71"
+CS_SHA256="181ee2eab452ed87903b62709ea96ac65a674b5466823c1a107e9a19ebb0d0fa"
 # Test seam: KIT_CS_SHA256 overrides the expected hash so CI can prove a mismatch is refused.
 # It exists only for tests - never set it for a real install.
 CS_SHA256="${KIT_CS_SHA256:-$CS_SHA256}"
@@ -301,7 +301,7 @@ if [ "$CODE_STRUCTURE" = 1 ]; then
   tmp="$(mktemp -d)"
   if command -v git >/dev/null 2>&1 && git -C "$tmp" init -q \
      && git -C "$tmp" fetch -q --depth 1 "$CS_REPO" "$CS_COMMIT" 2>/dev/null \
-     && git -C "$tmp" checkout -q FETCH_HEAD 2>/dev/null && [ -f "$tmp/code-structure/SKILL.md" ]; then
+     && git -C "$tmp" -c core.autocrlf=false -c core.eol=lf checkout -q FETCH_HEAD 2>/dev/null && [ -f "$tmp/code-structure/SKILL.md" ]; then
     got="$( (sha256sum "$tmp/code-structure/SKILL.md" 2>/dev/null || shasum -a 256 "$tmp/code-structure/SKILL.md") | cut -d' ' -f1)" || got=""
     if [ "$got" = "$CS_SHA256" ]; then echo "   ok (hash verified)"; CS_TMP="$tmp"
     else echo "   !! code-structure hash mismatch - NOT installed (expected $CS_SHA256, got $got)"; CS_FAIL="hash"; fi

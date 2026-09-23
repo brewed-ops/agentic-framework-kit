@@ -43,7 +43,7 @@ $RecordName = 'agentic-framework-kit.installed'
 # change upstream never reaches users without a kit release. Bump all three together (see install.sh).
 $CsRepo = 'https://github.com/michaelshimeles/skills'
 $CsCommit = '4b72f46b045e6fef52e6a98d4c162dd309826aed'
-$CsSha256 = '2f0ed408b525c65d422699490a159584fd977d0cfca5b15a5c9a47cf07b95f71'
+$CsSha256 = '181ee2eab452ed87903b62709ea96ac65a674b5466823c1a107e9a19ebb0d0fa'
 # Test seam: KIT_CS_SHA256 overrides the expected hash so CI can prove a mismatch is refused.
 # It exists only for tests - never set it for a real install.
 if ($env:KIT_CS_SHA256) { $CsSha256 = $env:KIT_CS_SHA256.ToLower() }
@@ -326,7 +326,7 @@ if (-not $NoCodeStructure) {
     git -C $CsTmp init -q 2>$null
     git -C $CsTmp fetch -q --depth 1 $CsRepo $CsCommit 2>$null
     $fetched = ($LASTEXITCODE -eq 0)
-    if ($fetched) { git -C $CsTmp checkout -q FETCH_HEAD 2>$null; $fetched = ($LASTEXITCODE -eq 0) }
+    if ($fetched) { git -C $CsTmp -c core.autocrlf=false -c core.eol=lf checkout -q FETCH_HEAD 2>$null; $fetched = ($LASTEXITCODE -eq 0) }
     $ErrorActionPreference = $prevEap
   }
   $skillFile = Join-Path $CsTmp 'code-structure\SKILL.md'
@@ -403,3 +403,4 @@ if ($CsFail -eq 'hash') {
   exit 1
 }
 Write-Output "Done ($KitVersion). Start a new session in your tool, then say `"brewedops app`" in an empty folder."
+exit 0   # explicit, so a caller's $LASTEXITCODE is 0 on success (a script that never calls exit leaves it unset)

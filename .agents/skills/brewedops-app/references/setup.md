@@ -80,8 +80,8 @@ checks the file's SHA-256, so a change upstream never reaches you without a kit 
 ```bash
 mkdir /tmp/ms-skills && cd /tmp/ms-skills && git init -q
 git fetch --depth 1 https://github.com/michaelshimeles/skills 4b72f46b045e6fef52e6a98d4c162dd309826aed
-git checkout FETCH_HEAD
-sha256sum code-structure/SKILL.md   # expect 2f0ed408b525c65d422699490a159584fd977d0cfca5b15a5c9a47cf07b95f71
+git -c core.autocrlf=false checkout FETCH_HEAD     # exact bytes: CRLF conversion changes the hash
+sha256sum code-structure/SKILL.md   # expect 181ee2eab452ed87903b62709ea96ac65a674b5466823c1a107e9a19ebb0d0fa
 cp -r code-structure <your global skills folder>/
 ```
 
