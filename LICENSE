@@ -19,12 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Third-party material:
-- .agents/skills/greploop/references/file-rules.md adapts review checklists from
-  alibaba/open-code-review (https://github.com/alibaba/open-code-review),
-  licensed under the Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
-- code-structure is NOT included; the installers fetch it from
-  https://github.com/michaelshimeles/skills under its author's terms.

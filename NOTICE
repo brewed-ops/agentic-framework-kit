@@ -1,0 +1,11 @@
+BrewedOps Agentic Framework kit
+Copyright (c) 2026 BrewedOps (Kenneth Villar) - MIT License, see LICENSE.
+
+Third-party material:
+
+- .agents/skills/greploop/references/file-rules.md adapts review checklists from
+  alibaba/open-code-review (https://github.com/alibaba/open-code-review), licensed under the
+  Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
+
+- code-structure is NOT included in this repository. The installers fetch it from
+  https://github.com/michaelshimeles/skills at a pinned commit, under its author's terms.
