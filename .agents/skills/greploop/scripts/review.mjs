@@ -104,13 +104,24 @@ function parseArgs(argv) {
   return { pos, opt }
 }
 
-// Content fingerprint of the change: stable across commits, changes when any file changes.
-function fingerprint(run) {
-  const diff = git(['diff', '--no-color', '--no-ext-diff', '--binary', run.mergeBase, '--', '.', ...EXCL])
-  const untracked = git(['ls-files', '--others', '--exclude-standard', '--', '.', ...EXCL])
-  return sha1(diff + '\0' + untracked).slice(0, 12)
+// Content fingerprint of the change: the diff against the merge-base plus the bytes of every untracked
+// file. Stable across commits, changes when any file changes. scanloop's scan.mjs computes the same
+// value into its report, so an imported scan says which code it covered - keep the two identical.
+// outDir: the scan's output folder (relative), whose files never count as part of the change.
+const OUT_FILES = ['report.json', 'report.json.tmp', 'gitleaks.json', 'semgrep.json', 'osv.json']
+const outExcl = (outDir) => (typeof outDir === 'string' ? OUT_FILES.map((f) => `:(exclude)${outDir ? `${outDir}/` : ''}${f}`) : [])
+const readBytes = (p) => { try { return readFileSync(join(ROOT, p)) } catch { return Buffer.from('<unreadable>') } }
+function untrackedFiles(outDir) {
+  return git(['ls-files', '-z', '--others', '--exclude-standard', '--', '.', ...EXCL, ...outExcl(outDir)]).split('\0').filter(Boolean).sort()
+}
+function fingerprint(run, outDir) {
+  const h = createHash('sha256').update('fp2\0')
+  h.update(git(['diff', '--no-color', '--no-ext-diff', '--binary', run.mergeBase, '--', '.', ...EXCL, ...outExcl(outDir)]))
+  for (const f of untrackedFiles(outDir)) h.update(`\0${f}\0`).update(readBytes(f))
+  return h.digest('hex')
 }
 function contentHash(files) { return sha1(files.map((f) => f + '\0' + (readText(f) ?? '<missing>')).join('\0')).slice(0, 12) }
+const lineCount = (buf) => { const s = buf.toString('utf8'); return s ? s.split('\n').length - (s.endsWith('\n') ? 1 : 0) : 0 }
 
 function changedFiles(mergeBase) {
   const files = {}
@@ -121,6 +132,11 @@ function changedFiles(mergeBase) {
   for (const l of git(['diff', '--name-status', '--no-renames', mergeBase, '--', '.', ...EXCL]).split('\n')) {
     const m = /^(\w)\t(.+)$/.exec(l)
     if (m && files[norm(m[2])]) files[norm(m[2])].status = m[1]
+  }
+  // Untracked files are part of the change: git diff never shows them, so add them as new files.
+  for (const f of untrackedFiles()) {
+    const buf = readBytes(f); const binary = buf.subarray(0, 8000).includes(0)
+    files[f] = { added: binary ? 0 : lineCount(buf), deleted: 0, binary, status: 'A', untracked: true }
   }
   return files
 }
@@ -135,6 +151,7 @@ function changedLines(run) {
       for (let i = start; i < start + n; i++) map[cur].add(i)
     }
   }
+  for (const f of untrackedFiles()) { const n = lineCount(readBytes(f)); map[f] = new Set(); for (let i = 1; i <= n; i++) map[f].add(i) }
   return map
 }
 
@@ -379,7 +396,8 @@ function cmdInit(opt) {
     if (new Set(run.bundles.map((b) => b.id)).size !== run.bundles.length) errs.push('bundle ids must be unique')
     if (errs.length) die(`bundles rejected:\n  ${errs.join('\n  ')}`)
   } else {
-    if (reviewable.length > 10 || lines > 400) die(`${reviewable.length} files / ${lines} changed lines is too big for one bundle - write a bundles file and pass --bundles (see references/runner.md)`)
+    const ut = reviewable.filter((f) => files[f].untracked).length
+    if (reviewable.length > 10 || lines > 400) die(`${reviewable.length} files / ${lines} changed lines is too big for one bundle - write a bundles file and pass --bundles (see references/runner.md)${ut ? `. ${ut} of those files are untracked - commit, gitignore or delete the ones that are not part of this change` : ''}`)
     run.bundles = [{ id: 'all', files: reviewable }]
   }
   if (run.bundles.length > 6 && !opt['force-size']) die(`${run.bundles.length} bundles - too big to converge; split the change (or pass --force-size if the user said to proceed)`)
@@ -406,6 +424,8 @@ function cmdInit(opt) {
   for (const b of run.bundles) console.log(`bundle ${b.id}: ${b.files.join(', ')}`)
   for (const e of run.excluded) console.log(`excluded ${e.path}: ${e.reason}`)
   console.log(`checks the project provides: ${run.providedChecks.join(', ') || 'none detected'}; required: ${(config.requiredChecks ?? run.providedChecks).join(', ') || 'none'}`)
+  const ut = Object.keys(files).filter((f) => files[f].untracked)
+  if (ut.length) console.log(`untracked files in scope (reviewed and fingerprinted like any change; scanloop needs them committed): ${ut.join(', ')}`)
   if (git(['status', '--porcelain', '--', '.', ...EXCL]).trim()) console.log('warning: uncommitted changes - commit the in-scope change before reviewing')
   if (git(['check-ignore', '-q', '.greploop/run.json'], true) === null) console.log('warning: .greploop/run.json is not gitignored - add ".greploop/*" plus "!.greploop/config.json" and "!.greploop/rules.md" to .gitignore')
 }
@@ -417,15 +437,23 @@ function cmdAdd(opt) {
   if (run.dispatches - run.window.dispatches >= run.budget.maxDispatches) die(`budget: ${run.budget.maxDispatches} reviewer dispatches used (${run.budget.formula}) - see status`, 2)
   const b = run.bundles.find((x) => x.id === opt.bundle)
   if (!b) die(`add needs --bundle <id> (one of: ${run.bundles.map((x) => x.id).join(', ')})`)
+  const snap = opt.snapshot
+  if (!snap) die(`add needs --snapshot <hash>: run \`snapshot --bundle ${b.id}\` before dispatching the reviewer and pass the hash it printed`)
+  if (!(run.snapshots ?? []).some((s) => s.bundle === b.id && s.hash === snap)) die(`${snap} is not a snapshot of bundle ${b.id} - take one with: snapshot --bundle ${b.id}`)
   const text = opt.file ? readFileSync(opt.file, 'utf8') : readFileSync(0, 'utf8')
   const it = (run.iterations[iter] ??= { replies: {}, partial: {} })
   run.dispatches++
+  // The reply describes the code as it was at the snapshot. If the bundle changed since, it describes code that is gone.
+  const now = contentHash(b.files)
+  if (now !== snap) { save(run); die(`bundle ${b.id} changed after snapshot ${snap} (now ${now}) - this reply reviewed code that no longer exists. Take a new snapshot and re-dispatch the reviewer`) }
   const partial = opt.supplement ? it.partial[b.id] : null
   if (opt.supplement && !partial) { save(run); die(`no partial reply is waiting for bundle ${b.id}`) }
+  if (partial && partial.snapshot !== snap) { delete it.partial[b.id]; save(run); die(`the partial reply for bundle ${b.id} reviewed snapshot ${partial.snapshot}; the bundle changed since, so it was dropped - re-dispatch the full review`) }
   const files = partial ? partial.missing : b.files
   const { errs, missing, r } = validate(text, files, partial ? [partial.lens] : lensesFor(run))
   const lens = r && lensesFor(run).includes(r.lens) ? r.lens : '?'
-  if (!errs.length && it.replies[b.id]?.[lens] && !partial) errs.push(`bundle ${b.id} already has a ${lens} reply this iteration`)
+  const prev = it.replies[b.id]?.[lens]
+  if (!errs.length && prev && !partial && prev.snapshot === snap) errs.push(`bundle ${b.id} already has a ${lens} reply this iteration`)
   if (errs.length || (missing.length && partial)) {
     const key = `${iter}/${b.id}/${lens}`; run.rejections[key] = (run.rejections[key] ?? 0) + 1
     save(run)
@@ -434,13 +462,13 @@ function cmdAdd(opt) {
   }
   const done = processReply(run, r, lens, b.id)
   if (missing.length) {
-    it.partial[b.id] = { lens, missing, score: r.score, summary: r.summary, coverage: r.coverage, ...done }
+    it.partial[b.id] = { lens, missing, snapshot: snap, score: r.score, summary: r.summary, coverage: r.coverage, ...done }
     save(run)
     die(`partial: coverage is missing ${missing.join(', ')}. Re-dispatch this reviewer for those files only, then: add --bundle ${b.id} --supplement`)
   }
-  let reply = { score: r.score, summary: r.summary, coverage: Object.fromEntries(Object.entries(r.coverage).map(([k, v]) => [norm(k), v])), ...done }
+  let reply = { snapshot: snap, score: r.score, summary: r.summary, coverage: Object.fromEntries(Object.entries(r.coverage).map(([k, v]) => [norm(k), v])), ...done }
   if (partial) {
-    reply = { score: Math.min(partial.score, r.score), summary: `${partial.summary} | ${r.summary}`, coverage: { ...Object.fromEntries(Object.entries(partial.coverage).map(([k, v]) => [norm(k), v])), ...reply.coverage },
+    reply = { snapshot: snap, score: Math.min(partial.score, r.score), summary: `${partial.summary} | ${r.summary}`, coverage: { ...Object.fromEntries(Object.entries(partial.coverage).map(([k, v]) => [norm(k), v])), ...reply.coverage },
       findings: [...partial.findings, ...done.findings], pre: [...partial.pre, ...done.pre],
       notes: Object.fromEntries(Object.keys(done.notes).map((k) => [k, partial.notes[k] + done.notes[k]])) }
     delete it.partial[b.id]
@@ -448,7 +476,7 @@ function cmdAdd(opt) {
   ;(it.replies[b.id] ??= {})[lens] = reply
   save(run)
   const n = reply.notes
-  console.log(`accepted ${lens} on bundle ${b.id} (iteration ${iter}): score ${reply.score}, ${reply.findings.length} finding(s) - ${n.reanchored} re-anchored, ${n.unanchored} unanchored, ${n.moved} moved to pre_existing`)
+  console.log(`accepted ${lens} on bundle ${b.id} (iteration ${iter}, snapshot ${snap}${prev && !partial ? ', replacing a reply on an older snapshot' : ''}): score ${reply.score}, ${reply.findings.length} finding(s) - ${n.reanchored} re-anchored, ${n.unanchored} unanchored, ${n.moved} moved to pre_existing`)
 }
 
 function cmdMerge(pos) {
@@ -463,6 +491,9 @@ function cmdMerge(pos) {
     const got = it.replies[b.id]
     if (!got) { if (mustAll) problems.push(`bundle ${b.id} was not reviewed (${run.profile === 'thorough' ? 'thorough re-reviews every bundle every iteration' : 'the first iteration reviews every bundle'})`); continue }
     const miss = need.filter((l) => !got[l]); if (miss.length) problems.push(`bundle ${b.id} is missing: ${miss.join(', ')}`)
+    const now = contentHash(b.files)
+    const stale = Object.entries(got).filter(([, rep]) => rep.snapshot !== now).map(([l, rep]) => `${l} (snapshot ${rep.snapshot})`)
+    if (stale.length) problems.push(`bundle ${b.id} changed after these reviewers' snapshot, so their replies describe code that is gone: ${stale.join(', ')} - take a new snapshot and re-dispatch them (add replaces a stale reply)`)
   }
   if (problems.length) die(`cannot merge iteration ${i}:\n  ${problems.join('\n  ')}`)
   // dedupe
@@ -510,7 +541,7 @@ function cmdMerge(pos) {
     const mine = rows.filter(({ g }) => { const o = ownerBundle(run, g.file); return o ? o === b.id : g.bundles.includes(b.id) })
     const count = (s) => mine.filter(({ g }) => g.severity === s).length
     const scores = Object.fromEntries(Object.entries(got).map(([l, rep]) => [l, rep.score]))
-    it.result.bundles[b.id] = { scores, min: Math.min(...Object.values(scores)), blocking: count('blocking'), major: count('major'), minor: count('minor'), contentHash: contentHash(b.files), rows: mine.map(({ row }) => row.id) }
+    it.result.bundles[b.id] = { scores, min: Math.min(...Object.values(scores)), blocking: count('blocking'), major: count('major'), minor: count('minor'), contentHash: Object.values(got)[0].snapshot, rows: mine.map(({ row }) => row.id) }
   }
   it.result.runScore = Math.min(...Object.values(it.result.bundles).map((x) => x.min))
   run.lastMerged = i
@@ -582,15 +613,16 @@ function cmdDispute(pos, opt) {
   save(run); console.log(`${row.id} disputed (Ground ${ground})`)
 }
 
-function recordCheck(run, name, cmd, exit, scope, source, durationMs) {
-  run.checks.push({ name, cmd, exit, scope: scope ?? null, source, durationMs: durationMs ?? null, fingerprint: fingerprint(run), at: new Date().toISOString() })
+function recordCheck(run, name, cmd, exit, scope, source, durationMs, fp) {
+  run.checks.push({ name, cmd, exit, scope: scope ?? null, source, durationMs: durationMs ?? null, fingerprint: fp ?? fingerprint(run), at: new Date().toISOString() })
 }
 function cmdCheck(pos, opt, runIt) {
   const run = load(); const name = pos[1]
   if (!name || !opt.cmd) die(`${runIt ? 'run' : 'check'} needs <name> --cmd "<command>"`)
   if (runIt) {
+    const fp = fingerprint(run) // the code the check ran on - if the command edits files, the result is stale at once
     const t = execute(opt.cmd)
-    recordCheck(run, name, opt.cmd, t.exit, opt.scope, 'ran', t.durationMs); save(run)
+    recordCheck(run, name, opt.cmd, t.exit, opt.scope, 'ran', t.durationMs, fp); save(run)
     console.log(`check ${name}: exit ${t.exit} in ${(t.durationMs / 1000).toFixed(1)}s (ran by the runner)`)
   } else {
     if (!/^-?\d+$/.test(opt.exit ?? '')) die('check needs --exit <code> (or use `run` to execute it)')
@@ -599,12 +631,33 @@ function cmdCheck(pos, opt, runIt) {
   }
 }
 
+function cmdSnapshot(opt) {
+  const run = load(); const b = run.bundles.find((x) => x.id === opt.bundle)
+  if (!b) die(`snapshot needs --bundle <id> (one of: ${run.bundles.map((x) => x.id).join(', ')})`)
+  const hash = contentHash(b.files); const iter = currentIteration(run)
+  run.snapshots ??= []
+  if (!run.snapshots.some((s) => s.bundle === b.id && s.hash === hash)) run.snapshots.push({ bundle: b.id, hash, iteration: iter, at: new Date().toISOString() })
+  save(run)
+  console.log(hash)
+  console.error(`snapshot of bundle ${b.id} (iteration ${iter}). Dispatch its reviewers now, then: add --bundle ${b.id} --snapshot ${hash} --file <reply.json>. Editing these files before the reply is added voids it.`)
+}
+
+// Refuse a report that did not scan exactly this code: same merge-base, same commit, same content.
 function cmdScan(pos) {
   const run = load(); const path = pos[1]
   if (!path) die('scan needs the path to .scanloop/report.json')
   let rep; try { rep = JSON.parse(readFileSync(path, 'utf8')) } catch (e) { die(`scan: cannot read ${path}: ${e.message}`) }
   if (!rep || typeof rep.tools !== 'object' || !Array.isArray(rep.findings) || typeof rep.verdict !== 'string') die('scan: report needs tools{}, findings[] and verdict')
-  const scan = { path: norm(path), at: new Date().toISOString(), fingerprint: fingerprint(run), verdict: rep.verdict, complete: rep.complete !== false,
+  if (!/^[0-9a-f]{64}$/.test(String(rep.fingerprint))) die('scan: the report records no content fingerprint (written by a scan.mjs older than kit 1.2) - re-run scanloop')
+  const outDir = rep.outDir == null ? null : String(rep.outDir)
+  if (outDir !== null && (/^[/\\:]|^\.\.(\/|$)|[*?[\]]/.test(outDir))) die(`scan: report outDir "${outDir}" is not a plain folder inside the repo`)
+  const short = (s) => String(s ?? 'none').slice(0, 7)
+  if (rep.base?.mergeBase !== run.mergeBase) die(`scan: the report scanned against merge-base ${short(rep.base?.mergeBase)}, this run reviews against ${short(run.mergeBase)} - re-run scanloop with --base ${run.base}`)
+  const head = git(['rev-parse', 'HEAD']).trim()
+  if (rep.head?.sha !== head) die(`scan: the report scanned commit ${short(rep.head?.sha)}, HEAD is ${short(head)} - re-run scanloop on the current commit`)
+  const now = fingerprint(run, outDir)
+  if (rep.fingerprint !== now) die(`scan: the code changed after this scan (scanned ${rep.fingerprint.slice(0, 12)}, now ${now.slice(0, 12)}) - re-run scanloop`)
+  const scan = { path: norm(path), at: new Date().toISOString(), fingerprint: rep.fingerprint, outDir, head, verdict: rep.verdict, complete: rep.complete !== false,
     required: Array.isArray(rep.required) ? rep.required : [], fullHistory: rep.fullHistory === true, tools: rep.tools }
   run.scans.push(scan)
   const ran = Object.entries(rep.tools).filter(([, t]) => t?.status === 'ran').map(([n]) => n)
@@ -663,7 +716,8 @@ function releaseConditions(run) {
     const ok = scan.verdict !== 'INCOMPLETE' && scan.complete && !missingReq.length
     add(`scanloop ${scan.verdict === 'INCOMPLETE' || !scan.complete ? 'INCOMPLETE' : 'required scanner did not run'}`, 'scanloop complete, every required scanner ran', ok,
       `verdict ${scan.verdict}${missingReq.length ? `; required but not run: ${missingReq.join(', ')}` : ''}`)
-    add('scan is stale', 'scanloop ran on the current code', scan.fingerprint === fp, scan.fingerprint === fp ? '' : 'code changed after the last scan - re-run scanloop')
+    const fresh = scan.fingerprint === fingerprint(run, scan.outDir)
+    add('scan is stale', 'scanloop ran on the current code', fresh, fresh ? '' : 'code changed after the last scan - re-run scanloop')
   }
   const latest = {}; for (const c of run.checks) latest[c.name] = c
   const required = run.config.requiredChecks ?? [...new Set([...run.providedChecks, ...Object.keys(latest)])]
@@ -694,7 +748,7 @@ function buildReport(run) {
   for (const c of Object.values(latest)) L.push(`${c.name}: \`${c.cmd}\` -> exit ${c.exit} (${c.source === 'ran' ? `ran by the runner, ${(c.durationMs / 1000).toFixed(1)}s` : 'claimed, not run by the runner'})${c.scope ? `; scope: ${c.scope}` : ''}${c.fingerprint !== fp ? ' [stale: code changed since]' : ''}`)
   const scan = run.scans.at(-1)
   if (scan) {
-    L.push(`scanloop: verdict ${scan.verdict}${scan.complete ? '' : ' (incomplete)'}${scan.fullHistory ? ', full-history secret sweep' : ''} from ${scan.path}${scan.fingerprint !== fp ? ' [stale: code changed since]' : ''}`)
+    L.push(`scanloop: verdict ${scan.verdict}${scan.complete ? '' : ' (incomplete)'}${scan.fullHistory ? ', full-history secret sweep' : ''} from ${scan.path}${scan.fingerprint !== fingerprint(run, scan.outDir) ? ' [stale: code changed since]' : ''}`)
     for (const [n, t] of Object.entries(scan.tools)) if (['ran', 'error'].includes(t?.status)) L.push(`  ${n} ${t.version ?? '(version unknown)'}: ${t.status}${t.command ? ` - \`${cmdText(t.command)}\`` : ''}`)
   }
   if (!L.length) L.push('none - no test, build, lint or scanner run was recorded')
@@ -780,7 +834,8 @@ function cmdStatus() {
 
 const USAGE = `usage: review.mjs <command>
   init --base <ref> [--profile quick|standard|thorough] [--bundles <file>] [--reset] [--force-size]
-  add --bundle <id> [--iter <n>] [--file <reply.json>] [--supplement]   (reply on stdin without --file)
+  snapshot --bundle <id>   (before dispatching a bundle's reviewers; prints the hash for add)
+  add --bundle <id> --snapshot <hash> [--iter <n>] [--file <reply.json>] [--supplement]   (reply on stdin without --file)
   merge <iteration>
   resolve <id> --how "<what changed>" [--test "<cmd>"] [--reverted-exit <n>]
   dispute <id> --ground A|B --proof "<quoted line>"
@@ -794,10 +849,11 @@ const USAGE = `usage: review.mjs <command>
 
 const { pos, opt } = parseArgs(process.argv.slice(2))
 const cmd = pos[0]
-const MUTATING = new Set(['init', 'add', 'merge', 'resolve', 'dispute', 'run', 'check', 'scan', 'assign', 'escalate'])
+const MUTATING = new Set(['init', 'snapshot', 'add', 'merge', 'resolve', 'dispute', 'run', 'check', 'scan', 'assign', 'escalate'])
 if (MUTATING.has(cmd)) lock()
 switch (cmd) {
   case 'init': cmdInit(opt); break
+  case 'snapshot': cmdSnapshot(opt); break
   case 'add': cmdAdd(opt); break
   case 'merge': cmdMerge(pos); break
   case 'resolve': cmdResolve(pos, opt); break

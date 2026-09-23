@@ -24,7 +24,8 @@ to each finding, what was NOT covered, and whether the project's required condit
 "Passed the configured checks" is the strongest claim it makes.
 
 **The runner.** `scripts/review.mjs` (Node 18+, no npm packages) enforces the rules below in
-code: it validates every reviewer reply, re-anchors findings, applies the scope rule, keeps the
+code: it validates every reviewer reply, ties each reply to the exact file contents its reviewer
+saw, re-anchors findings, applies the scope rule, keeps the
 ledger, refuses disputes without proof, records the checks it runs, counts the budget, and writes
 the report. The commands appear at each step; the full CLI and every rule it applies are in
 `references/runner.md`. State goes in `.greploop/run.json` - gitignore `.greploop/*` (keep
@@ -162,7 +163,9 @@ For iteration `i` from 1 to the profile's max:
 
 0. **Scan.** Run scanloop and import its report: `review.mjs scan .scanloop/report.json`.
 1. **Review (panel of 3 per bundle, in parallel).** For every bundle that needs review this
-   iteration (see "Which bundles re-review" below), dispatch its three reviewers, all at
+   iteration (see "Which bundles re-review" below), first take a snapshot -
+   `review.mjs snapshot --bundle <id>` prints a hash of the bundle's files as they are now - then
+   dispatch its three reviewers, all at
    once so they run in parallel (in one message or batch where your tool allows it). Each reviewer gets its bundle's diff and file
    PATHS (the files it owns), the list of the OTHER changed files as context only, the
    MUST-CHECK rules, the bundle's matched file-rules sections, the ledger rows for its files,
@@ -199,8 +202,12 @@ For iteration `i` from 1 to the profile's max:
    }
    ```
    (quick profile: `"lens": "all"`.) Each reviewer must enumerate ALL findings it sees, not stop
-   at the first blocker. Feed every reply to the runner: `review.mjs add --bundle <id> --file
-   reply.json`. It rejects, with the exact violation, anything off this shape: unknown keys, a
+   at the first blocker. Feed every reply to the runner: `review.mjs add --bundle <id> --snapshot
+   <hash> --file .greploop/replies/<bundle>-<lens>.json` (keep replies under `.greploop/`, which is
+   gitignored - anywhere else they are untracked files and join the change). A reply only counts
+   for the snapshot its reviewer saw: if the bundle's files changed after the snapshot, `add`
+   refuses it, and `merge` refuses replies whose files changed after `add`. So never edit a
+   bundle's files between dispatch and merge - merge first, then fix. It rejects, with the exact violation, anything off this shape: unknown keys, a
    non-integer score, an empty field, a severity outside the three, a 5 that still lists findings,
    or a blocking/major finding scored above 3. On a rejection, re-dispatch that one reviewer with
    the runner's message; if it fails again, STOP and surface the raw output - never treat an

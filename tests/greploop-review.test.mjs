@@ -64,21 +64,35 @@ const reply = (lens, score, findings = [], over = {}) => JSON.stringify({
   coverage: Object.fromEntries(FILES.map((f) => [f, 'reviewed'])), findings, pre_existing: [], ...over,
 })
 const finding = (code, issue, severity = 'major', file = 'src/math.js:1') => ({ severity, file, code, issue, fix: 'guard it' })
+// The hash `snapshot` prints on stdout (its instructions go to stderr).
+const snapshot = (dir, bundle = 'all') => spawnSync(process.execPath, [SCRIPT, 'snapshot', '--bundle', bundle], { cwd: dir, encoding: 'utf8' }).stdout.trim()
+// Snapshot the bundle as a reviewer dispatch would, then add the reply against that snapshot.
+const add = (dir, bundle, input, extra = [], snap = snapshot(dir, bundle)) => rv(dir, ['add', '--bundle', bundle, '--snapshot', snap, ...extra], input)
 function cleanPanel(dir) {
-  for (const l of ['correctness', 'security', 'quality']) assert.equal(rv(dir, ['add', '--bundle', 'all'], reply(l, 5)).code, 0)
+  for (const l of ['correctness', 'security', 'quality']) assert.equal(add(dir, 'all', reply(l, 5)).code, 0)
   assert.equal(rv(dir, ['merge', '1']).code, 0)
 }
+// A real scanloop report: scan.mjs with stub scanners (kept outside the repo so they are not untracked
+// files in it). This also proves scan.mjs and review.mjs compute the same fingerprint.
+const SCAN = join(dirname(SCRIPT), '..', '..', 'scanloop', 'scripts', 'scan.mjs')
+const STUBS = mkdtempSync(join(tmpdir(), 'greploop-stubs-'))
+process.on('exit', () => rmSync(STUBS, { recursive: true, force: true }))
+function stub(name, output) {
+  const file = join(STUBS, `${name}.mjs`)
+  writeFileSync(file, `import { writeFileSync } from 'node:fs'
+const a = process.argv.slice(2)
+if (a[0] === 'version' || a[0] === '--version') { console.log('${name} 0.0.0-stub'); process.exit(0) }
+const i = a.findIndex((x) => ['--report-path', '--output', '--output-file'].includes(x))
+if (i >= 0) writeFileSync(a[i + 1], ${JSON.stringify(JSON.stringify(output))})
+`)
+  return JSON.stringify([process.execPath, file])
+}
 function scanFile(dir, verdict) {
-  const p = join(dir, '.greploop', `scan-${Math.random().toString(36).slice(2)}.json`)
-  writeFileSync(p, JSON.stringify({
-    tools: {
-      gitleaks: { status: 'ran', version: '8.21.0', command: 'gitleaks git --log-opts=main..HEAD .' },
-      semgrep: { status: verdict === 'INCOMPLETE' ? 'missing' : 'ran', version: '1.100.0', command: 'semgrep scan --metrics=off' },
-      'osv-scanner': { status: 'not-applicable', version: null, command: null },
-    },
-    required: ['gitleaks', 'semgrep'], complete: verdict !== 'INCOMPLETE', findings: [], verdict,
-  }))
-  return p
+  const env = { ...process.env, SCANLOOP_GITLEAKS: stub('gitleaks', []), SCANLOOP_OSV: stub('osv', { results: [] }),
+    SCANLOOP_SEMGREP: verdict === 'INCOMPLETE' ? JSON.stringify([join(STUBS, 'no-such-semgrep')]) : stub('semgrep', { results: [], errors: [] }) }
+  const r = spawnSync(process.execPath, [SCAN, '--base', 'main'], { cwd: dir, env, encoding: 'utf8' })
+  assert.equal(r.status, verdict === 'CLEAN' ? 0 : 2, r.stdout + r.stderr) // 'UNCOMMITTED': real stubs, INCOMPLETE from the tree
+  return join(dir, '.scanloop', 'report.json')
 }
 const SECTIONS = ['Executed checks', 'Review findings', 'Coverage gaps', 'Release decision']
 
@@ -86,7 +100,7 @@ test('a valid reply is accepted', () => {
   const r = makeRepo()
   try {
     assert.equal(rv(r.dir, ['init', '--base', 'main', '--profile', 'standard']).code, 0)
-    const a = rv(r.dir, ['add', '--bundle', 'all'], reply('correctness', 5))
+    const a = add(r.dir, 'all', reply('correctness', 5))
     assert.equal(a.code, 0, a.out)
     assert.match(a.out, /accepted correctness on bundle all/)
   } finally { r.cleanup() }
@@ -96,11 +110,11 @@ test('a reply missing a coverage path is rejected until a supplement covers it',
   const r = makeRepo()
   try {
     rv(r.dir, ['init', '--base', 'main', '--profile', 'standard'])
-    const a = rv(r.dir, ['add', '--bundle', 'all'], reply('security', 5, [], { coverage: { 'src/math.js': 'reviewed' } }))
+    const a = add(r.dir, 'all', reply('security', 5, [], { coverage: { 'src/math.js': 'reviewed' } }))
     assert.equal(a.code, 1)
     assert.match(a.out, /coverage is missing src\/format\.js/)
     assert.equal(state(r.dir).iterations[1].replies.all, undefined)
-    const s = rv(r.dir, ['add', '--bundle', 'all', '--supplement'], reply('security', 5, [], { coverage: { 'src/format.js': 'skipped: pure formatting, no logic in this lens' } }))
+    const s = add(r.dir, 'all', reply('security', 5, [], { coverage: { 'src/format.js': 'skipped: pure formatting, no logic in this lens' } }), ['--supplement'])
     assert.equal(s.code, 0, s.out)
     assert.match(state(r.dir).iterations[1].replies.all.security.coverage['src/format.js'], /^skipped: /)
   } finally { r.cleanup() }
@@ -111,7 +125,7 @@ test('a non-integer score is rejected', () => {
   try {
     rv(r.dir, ['init', '--base', 'main', '--profile', 'standard'])
     for (const score of [4.5, '4']) {
-      const a = rv(r.dir, ['add', '--bundle', 'all'], reply('quality', score))
+      const a = add(r.dir, 'all', reply('quality', score))
       assert.equal(a.code, 1)
       assert.match(a.out, /score must be an integer 1-5/)
     }
@@ -122,7 +136,7 @@ test('a drifted line number is re-anchored to the verbatim snippet', () => {
   const r = makeRepo()
   try {
     rv(r.dir, ['init', '--base', 'main', '--profile', 'standard'])
-    const a = rv(r.dir, ['add', '--bundle', 'all'], reply('correctness', 3, [finding('  return a / b', 'divide by zero returns Infinity', 'major', 'src/math.js:2')]))
+    const a = add(r.dir, 'all', reply('correctness', 3, [finding('  return a / b', 'divide by zero returns Infinity', 'major', 'src/math.js:2')]))
     assert.equal(a.code, 0, a.out)
     const f = state(r.dir).iterations[1].replies.all.correctness.findings[0]
     assert.equal(f.line, 11)
@@ -134,7 +148,7 @@ test('a hallucinated snippet is marked unanchored', () => {
   const r = makeRepo()
   try {
     rv(r.dir, ['init', '--base', 'main', '--profile', 'standard'])
-    const a = rv(r.dir, ['add', '--bundle', 'all'], reply('correctness', 3, [finding('return a % b', 'modulo by zero', 'major', 'src/math.js:11')]))
+    const a = add(r.dir, 'all', reply('correctness', 3, [finding('return a % b', 'modulo by zero', 'major', 'src/math.js:11')]))
     assert.equal(a.code, 0, a.out)
     assert.match(a.out, /1 unanchored/)
     assert.equal(state(r.dir).iterations[1].replies.all.correctness.findings[0].anchored, false)
@@ -145,7 +159,7 @@ test('a finding on a line the diff did not touch moves to pre_existing', () => {
   const r = makeRepo()
   try {
     rv(r.dir, ['init', '--base', 'main', '--profile', 'standard'])
-    const a = rv(r.dir, ['add', '--bundle', 'all'], reply('correctness', 3, [finding('return a - b', 'subtraction coerces strings silently', 'major', 'src/math.js:7')]))
+    const a = add(r.dir, 'all', reply('correctness', 3, [finding('return a - b', 'subtraction coerces strings silently', 'major', 'src/math.js:7')]))
     assert.equal(a.code, 0, a.out)
     const rep = state(r.dir).iterations[1].replies.all.correctness
     assert.equal(rep.findings.length, 0)
@@ -161,7 +175,7 @@ test('exit gate: minor-only findings (every reviewer at 4) are clean; one review
     try {
       rv(r.dir, ['init', '--base', 'main', '--profile', 'standard'])
       ;['correctness', 'security', 'quality'].forEach((l, i) => {
-        const res = rv(r.dir, ['add', '--bundle', 'all'], reply(l, scores[i], scores[i] < 5 ? minor : []))
+        const res = add(r.dir, 'all', reply(l, scores[i], scores[i] < 5 ? minor : []))
         assert.equal(res.code, 0, res.out)
       })
       assert.equal(rv(r.dir, ['merge', '1']).code, 0)
@@ -176,9 +190,9 @@ test('merge dedupes across lenses, takes the max severity and tags consensus', (
   const r = makeRepo()
   try {
     rv(r.dir, ['init', '--base', 'main', '--profile', 'standard'])
-    assert.equal(rv(r.dir, ['add', '--bundle', 'all'], reply('correctness', 4, [finding('return a / b', 'divide by zero returns Infinity', 'minor', 'src/math.js:10')])).code, 0)
-    assert.equal(rv(r.dir, ['add', '--bundle', 'all'], reply('security', 3, [finding('return a / b', 'unchecked divisor from input', 'major', 'src/math.js:12')])).code, 0)
-    assert.equal(rv(r.dir, ['add', '--bundle', 'all'], reply('quality', 5)).code, 0)
+    assert.equal(add(r.dir, 'all', reply('correctness', 4, [finding('return a / b', 'divide by zero returns Infinity', 'minor', 'src/math.js:10')])).code, 0)
+    assert.equal(add(r.dir, 'all', reply('security', 3, [finding('return a / b', 'unchecked divisor from input', 'major', 'src/math.js:12')])).code, 0)
+    assert.equal(add(r.dir, 'all', reply('quality', 5)).code, 0)
     const m = rv(r.dir, ['merge', '1'])
     assert.equal(m.code, 0, m.out)
     const { ledger, iterations } = state(r.dir)
@@ -195,9 +209,9 @@ test('disputes: protected subjects refused, proof required and checked', () => {
   const r = makeRepo()
   try {
     rv(r.dir, ['init', '--base', 'main', '--profile', 'standard'])
-    rv(r.dir, ['add', '--bundle', 'all'], reply('correctness', 3, [finding('return a / b', 'b can be undefined here, so the result is NaN', 'major', 'src/math.js:11')]))
-    rv(r.dir, ['add', '--bundle', 'all'], reply('security', 3, [finding("return '$' + n.toFixed(2)", 'the dollar sign is hardcoded for every locale', 'major', 'src/format.js:2')]))
-    rv(r.dir, ['add', '--bundle', 'all'], reply('quality', 5))
+    add(r.dir, 'all', reply('correctness', 3, [finding('return a / b', 'b can be undefined here, so the result is NaN', 'major', 'src/math.js:11')]))
+    add(r.dir, 'all', reply('security', 3, [finding("return '$' + n.toFixed(2)", 'the dollar sign is hardcoded for every locale', 'major', 'src/format.js:2')]))
+    add(r.dir, 'all', reply('quality', 5))
     assert.equal(rv(r.dir, ['merge', '1']).code, 0)
     const [nullRow, localeRow] = state(r.dir).ledger
     const p = rv(r.dir, ['dispute', nullRow.id, '--ground', 'B', '--proof', 'return a / b'])
@@ -220,12 +234,12 @@ test('quick profile: budget exhaustion refuses more reviews and status exits 2',
   try {
     const i = rv(r.dir, ['init', '--base', 'main'])
     assert.match(i.out, /greploop run: quick/)
-    assert.equal(rv(r.dir, ['add', '--bundle', 'all'], reply('all', 3, [finding('return a / b', 'divide by zero returns Infinity')])).code, 0)
+    assert.equal(add(r.dir, 'all', reply('all', 3, [finding('return a / b', 'divide by zero returns Infinity')])).code, 0)
     assert.equal(rv(r.dir, ['merge', '1']).code, 0)
     const s = rv(r.dir, ['status'])
     assert.equal(s.code, 2, s.out)
     assert.match(s.out, /escalate/)
-    const more = rv(r.dir, ['add', '--bundle', 'all'], reply('all', 5))
+    const more = add(r.dir, 'all', reply('all', 5))
     assert.equal(more.code, 2)
     assert.match(more.out, /budget/)
     const e = rv(r.dir, ['escalate'])
@@ -238,10 +252,10 @@ test('quick profile: the reviewer dispatch cap holds even for rejected replies',
   const r = makeRepo()
   try {
     rv(r.dir, ['init', '--base', 'main', '--profile', 'quick'])
-    assert.equal(rv(r.dir, ['add', '--bundle', 'all'], 'not json').code, 1)
-    const second = rv(r.dir, ['add', '--bundle', 'all'], 'still not json')
+    assert.equal(add(r.dir, 'all', 'not json').code, 1)
+    const second = add(r.dir, 'all', 'still not json')
     assert.match(second.out, /STOP and show the raw output/)
-    const third = rv(r.dir, ['add', '--bundle', 'all'], reply('all', 5))
+    const third = add(r.dir, 'all', reply('all', 5))
     assert.equal(third.code, 2)
     assert.match(third.out, /2 reviewer dispatches used/)
   } finally { r.cleanup() }
@@ -308,5 +322,82 @@ test('report: a project with no test command passes only as "untested"', () => {
     const rep = rv(r.dir, ['report']).out
     assert.match(rep, /Passed the configured checks - untested: no test command ran \(the project provides none\)/)
     assert.match(rep, /no test command ran/)
+  } finally { r.cleanup() }
+})
+
+// Regression tests for the three evidence-handling gaps an outside review reproduced against 1.1.0.
+test('scan: a report of other code is refused at import (older commit, later edit, no fingerprint)', () => {
+  const r = makeRepo()
+  const g = (...a) => spawnSync('git', a, { cwd: r.dir, encoding: 'utf8' })
+  try {
+    rv(r.dir, ['init', '--base', 'main', '--profile', 'standard'])
+    const reportA = readFileSync(scanFile(r.dir, 'CLEAN'), 'utf8')
+    r.write('src/format.js', FORMAT + '// B\n'); g('commit', '-qam', 'B')
+    const old = join(r.dir, '.greploop', 'report-a.json'); writeFileSync(old, reportA)
+    const a = rv(r.dir, ['scan', old])
+    assert.equal(a.code, 1)
+    assert.match(a.out, /scanned commit .*HEAD is/)
+    assert.equal(state(r.dir).scans.length, 0)
+    const fresh = scanFile(r.dir, 'CLEAN')
+    r.write('src/format.js', FORMAT + '// C, not committed\n')
+    const b = rv(r.dir, ['scan', fresh])
+    assert.equal(b.code, 1)
+    assert.match(b.out, /code changed after this scan/)
+    const legacy = join(r.dir, '.greploop', 'legacy.json')
+    const { fingerprint, ...noFp } = JSON.parse(readFileSync(fresh, 'utf8')); writeFileSync(legacy, JSON.stringify(noFp))
+    assert.match(rv(r.dir, ['scan', legacy]).out, /no content fingerprint/)
+  } finally { r.cleanup() }
+})
+
+test('a reply counts only for the snapshot its reviewer was given', () => {
+  const r = makeRepo()
+  try {
+    rv(r.dir, ['init', '--base', 'main', '--profile', 'standard'])
+    assert.match(rv(r.dir, ['add', '--bundle', 'all'], reply('correctness', 5)).out, /add needs --snapshot/)
+    // edited between dispatch and add
+    const s1 = snapshot(r.dir)
+    r.write('src/format.js', FORMAT + '// edit 1\n')
+    const late = add(r.dir, 'all', reply('correctness', 5), [], s1)
+    assert.equal(late.code, 1)
+    assert.match(late.out, /changed after snapshot .* no longer exists/)
+    // edited between add and merge (the reproduced case)
+    for (const l of ['correctness', 'security', 'quality']) assert.equal(add(r.dir, 'all', reply(l, 5)).code, 0)
+    r.write('src/format.js', FORMAT + '// edit 2\n')
+    const m = rv(r.dir, ['merge', '1'])
+    assert.equal(m.code, 1)
+    assert.match(m.out, /changed after these reviewers' snapshot.*correctness.*security.*quality/)
+    // re-dispatching on the new snapshot replaces the stale replies, then merge accepts
+    const s2 = snapshot(r.dir)
+    for (const l of ['correctness', 'security', 'quality']) {
+      const a = add(r.dir, 'all', reply(l, 5), [], s2)
+      assert.equal(a.code, 0, a.out)
+      assert.match(a.out, /replacing a reply on an older snapshot/)
+    }
+    assert.equal(rv(r.dir, ['merge', '1']).code, 0)
+    assert.equal(state(r.dir).iterations[1].result.bundles.all.contentHash, s2)
+    assert.match(rv(r.dir, ['status']).out, /bundle all: CLEAN/)
+    r.write('src/format.js', FORMAT + '// edit 3\n')
+    assert.match(rv(r.dir, ['status']).out, /files changed since the iteration 1 review/)
+  } finally { r.cleanup() }
+})
+
+test('untracked files are in scope: bundled, reviewed, and their contents make evidence stale', () => {
+  const r = makeRepo({ config: { requiredChecks: ['test'] } })
+  try {
+    r.write('src/extra.js', 'export const k = 1\n')
+    const i = rv(r.dir, ['init', '--base', 'main', '--profile', 'standard'])
+    assert.match(i.out, /untracked files in scope .*src\/extra\.js/)
+    assert.ok(state(r.dir).bundles[0].files.includes('src/extra.js'))
+    const partial = add(r.dir, 'all', reply('correctness', 5))
+    assert.match(partial.out, /coverage is missing src\/extra\.js/)
+    rv(r.dir, ['run', 'test', '--cmd', `${NODE} -e "process.exit(0)"`])
+    assert.doesNotMatch(rv(r.dir, ['report']).out, /test stale/)
+    r.write('src/extra.js', 'export const k = 2\n') // same name, new contents
+    assert.match(rv(r.dir, ['report']).out, /test stale/)
+    r.write('src/late.js', 'export const late = 1\n') // created after init
+    assert.match(rv(r.dir, ['status']).out, /changed files in no bundle \(assign them\): src\/late\.js/)
+    // scanloop refuses to call an uncommitted tree complete, so the release decision cannot pass
+    rv(r.dir, ['scan', scanFile(r.dir, 'UNCOMMITTED')])
+    assert.match(rv(r.dir, ['report']).out, /Did not pass: .*scanloop INCOMPLETE/)
   } finally { r.cleanup() }
 })

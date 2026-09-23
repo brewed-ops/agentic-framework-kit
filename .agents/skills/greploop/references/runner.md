@@ -21,13 +21,14 @@ State lives in `.greploop/run.json` in the reviewed repo. Add this to that repo'
 | Command | What it does |
 |---|---|
 | `init --base <ref> [--profile quick\|standard\|thorough] [--bundles <file>] [--reset] [--force-size]` | Starts a run: merge-base and head sha, the reviewable file list (Step 0 exclusions applied, each excluded path with its reason), the profile and its budget, the bundles, and the checks the project provides. |
-| `add --bundle <id> [--iter <n>] [--file <reply.json>] [--supplement]` | Validates one reviewer reply (from `--file`, else stdin), re-anchors and scope-checks its findings, stores it. Counts as one reviewer dispatch whether accepted or rejected. |
+| `snapshot --bundle <id>` | Hashes the bundle's files as they are now and prints the hash (stdout). Take it right before dispatching the bundle's reviewers. |
+| `add --bundle <id> --snapshot <hash> [--iter <n>] [--file <reply.json>] [--supplement]` | Validates one reviewer reply (from `--file`, else stdin), refuses it if the bundle changed since the snapshot, re-anchors and scope-checks its findings, stores it. Counts as one reviewer dispatch whether accepted or rejected. |
 | `merge <n>` | Closes iteration n: dedupes findings across lenses and bundles, updates the ledger, scores each bundle. |
 | `resolve <id> --how "<what changed>" [--test "<cmd>"] [--reverted-exit <n>]` | Marks a ledger row fixed. `--test` is executed and must pass. |
 | `dispute <id> --ground A\|B --proof "<quoted line>"` | Marks a ledger row disputed, if the ground and proof hold up. |
 | `run <name> --cmd "<command>" [--scope "<what it covered>"]` | Executes a check (test, build, lint, typecheck) and records its exit code and duration. |
 | `check <name> --cmd "<command>" --exit <code> [--scope "..."]` | Records a check you ran yourself. Shown as "claimed". Prefer `run`. |
-| `scan <path/to/.scanloop/report.json>` | Imports a scanloop report: scanner statuses become executed checks or coverage gaps, findings become ledger rows. |
+| `scan <path/to/.scanloop/report.json>` | Imports a scanloop report of the current code (refused otherwise): scanner statuses become executed checks or coverage gaps, findings become ledger rows. |
 | `assign <file> --bundle <id>` | Adds a file a fix created to the bundle of the file that imports it. |
 | `escalate [--profile standard\|thorough]` | Moves the run up a profile, keeping the ledger, checks and scans. The next iteration reviews every bundle. |
 | `status` | Per-bundle exit state, open ledger rows, release conditions. Exit 0 = exit condition met, 1 = not met, 2 = budget exhausted. |
@@ -40,8 +41,10 @@ If a crash leaves the lock behind, delete it.
 
 - **Diff.** The working tree against `git merge-base <base> HEAD`, so committed and uncommitted
   changes are both in, and every line number refers to the file as it is on disk. Untracked files
-  are not in the diff - commit the change first (Step 0 already says to). An empty diff is an
-  error: the base is wrong.
+  that are not gitignored are in too, as new files: `init` lists them, they are bundled and
+  reviewed like any change, and a file created later shows up as "changed files in no bundle"
+  until you `assign` it. Commit, gitignore or delete anything that is not part of the change. An
+  empty diff is an error: the base is wrong.
 - **Exclusions.** Lockfiles, build output, `node_modules/`, `vendor/`, minified bundles, generated
   code, test snapshots, binaries, DB files, deleted files. Extra globs from
   `.greploop/config.json` `"exclude"`. Tests are never excluded.
@@ -75,6 +78,23 @@ If a crash leaves the lock behind, delete it.
 `add` refuses (exit 2) once the iterations or dispatches are used. A rejected or partial reply
 counts as a dispatch: a reviewer that keeps returning bad JSON is spending the budget. Wall clock is
 shown in `status` against the profile's estimate but not enforced.
+
+## snapshot and add - which code a reply describes
+
+A reviewer reads the bundle's files from disk, so its reply describes the files as they were when
+it was dispatched. `snapshot --bundle <id>` records a hash of those files (names and contents);
+give the same hash to every reviewer of that bundle and pass it to `add --snapshot <hash>`.
+
+- `add` refuses a hash that `snapshot` never issued for that bundle, and refuses the reply when the
+  bundle's files no longer match the snapshot: the reviewer read code that is gone. That refusal
+  still counts as a dispatch. Take a new snapshot and re-dispatch.
+- `merge` refuses while any reply's snapshot differs from the bundle's current files (they changed
+  after `add`). Re-dispatch those reviewers on a new snapshot; `add` replaces a reply whose
+  snapshot is out of date.
+- The merged result stores the snapshot the reviewers saw, so any later edit makes the bundle
+  "changed since the iteration N review" in `status`.
+
+In practice: merge before you fix. Editing a bundle between dispatch and merge throws its replies away.
 
 ## add - what a reply must look like
 
@@ -141,7 +161,11 @@ reviewers should say plainly when an untouched caller broke because of the chang
 
 ## scan
 
-Reads the scanloop report (`tools{name: {status, version, command}}`, `required`, `complete`,
+Refuses a report that did not scan the current code: it must record a `fingerprint` (scanloop
+1.2+), its merge-base must be this run's, its `head.sha` must be the current HEAD, and its
+fingerprint must equal the current code's (scan.mjs and review.mjs compute the same sha256 of the
+diff against the merge-base plus the bytes of every untracked file, leaving out the scan's own
+output files). Then it reads the scanloop report (`tools{name: {status, version, command}}`, `required`, `complete`,
 `findings[]`, `verdict`). Each finding becomes (or updates) a ledger row keyed by tool, rule and
 file. On a re-import, an open scanner row that a tool which ran no longer reports is resolved as
 "no longer reported" - fixed by re-running, not by claim - and a resolved row reported again is
@@ -162,9 +186,12 @@ reopened. `missing`, `not-applicable` and `error` tools show up as coverage gaps
   `--log-opts`, or a report with `"fullHistory": true` from `scan.mjs --full-history`), and every
   blocking/major fix has a passing test plus a non-zero `--reverted-exit`
 
-"Current code" is a fingerprint of the diff against the merge-base plus untracked file names. A
-check or scan recorded before a later edit is stale and does not count; committing does not make
-it stale, editing does.
+"Current code" is a sha256 fingerprint of the diff against the merge-base plus the name and bytes
+of every untracked file. A check is bound to the fingerprint from just before it ran, a scan to the
+one scanloop recorded before its scanners started. Either is stale after any later edit, including
+an edit to an untracked file; committing does not make it stale, editing does. scanloop marks a
+scan of an uncommitted tree INCOMPLETE (gitleaks reads commits only), so untracked or uncommitted
+work cannot reach "Passed the configured checks".
 
 Required checks: `.greploop/config.json` `"requiredChecks": ["test", "build"]` when present;
 otherwise every check the project provides plus every check you recorded. When no required check
