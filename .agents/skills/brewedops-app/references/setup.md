@@ -74,12 +74,16 @@ By hand: copy each folder in `.agents/skills/` into the global skills folder fro
 
 ## code-structure (by Michael Shimeles)
 
-Not included in this kit - it has no license for redistribution, so fetch it from its author:
+Not included in this kit - it has no license for redistribution, so fetch it from its author.
+The installer does this for you (unless you pass `--no-code-structure`) at a pinned commit and
+checks the file's SHA-256, so a change upstream never reaches you without a kit release. By hand:
 ```bash
-git clone --depth 1 https://github.com/michaelshimeles/skills /tmp/ms-skills
-cp -r /tmp/ms-skills/code-structure <your global skills folder>/
+mkdir /tmp/ms-skills && cd /tmp/ms-skills && git init -q
+git fetch --depth 1 https://github.com/michaelshimeles/skills 4b72f46b045e6fef52e6a98d4c162dd309826aed
+git checkout FETCH_HEAD
+sha256sum code-structure/SKILL.md   # expect 2f0ed408b525c65d422699490a159584fd977d0cfca5b15a5c9a47cf07b95f71
+cp -r code-structure <your global skills folder>/
 ```
-The installer does this for you unless you pass `--no-code-structure`.
 
 ## scanloop's scanners (all free, open source)
 

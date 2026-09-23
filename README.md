@@ -16,10 +16,25 @@ before the next one starts. Nothing goes live until you say so.
 | `greploop` | Three AI reviewers score each change out of 5; the AI fixes and re-checks until 5/5 |
 | `scanloop` | Free local scan for leaked secrets, risky code and vulnerable packages |
 | `ship` | CI on every push, plus a careful deploy checklist: back up first, prove it is live |
-| `code-structure` | Keeps one clean version of each thing (by [Michael Shimeles](https://github.com/michaelshimeles/skills) - fetched from his repo by the installer) |
+| `code-structure` | Keeps one clean version of each thing - see below (by [Michael Shimeles](https://github.com/michaelshimeles/skills), fetched from his repo) |
 
 Plus a starter **global rules file** (the rulebook your AI reads every session) and a
 **project rules template** (AGENTS.md) that keeps the loop on in every project.
+
+**See it work first:** [`examples/`](examples/) has a real greploop run on a small demo
+project - the diff, what the reviewers found, the fixes, and the score going to 5/5.
+
+### About code-structure
+
+Left alone, an AI copies the same logic into every place that needs it - three slightly
+different "send email" or "call the API" blocks, and a bug fixed in one survives in the others.
+code-structure is a skill that stops that: repeated operational steps get pulled into one
+shared service function, and the feature code ("actions") only decides *when* to call it. It is
+written by Michael Shimeles and has no license for redistribution, so this kit does not copy it -
+the installer fetches it from his repo at a fixed commit and checks its hash. Read the exact
+version you will get before installing:
+[code-structure/SKILL.md @ 4b72f46](https://github.com/michaelshimeles/skills/blob/4b72f46b045e6fef52e6a98d4c162dd309826aed/code-structure/SKILL.md).
+Skip it with `--no-code-structure`.
 
 ## Install - the easy way
 
@@ -61,6 +76,17 @@ rules file is never overwritten.
 
 Then start a new session in your tool, open an empty folder, and say **"brewedops app"**.
 
+## Update, check the version, uninstall
+
+```bash
+git pull && ./install.sh --tool codex        # update: rerun the same install
+./install.sh --version                       # the kit's version (installed one: ~/.agents/agentic-framework-kit.installed)
+./install.sh --tool codex --uninstall        # remove the kit's skills
+```
+PowerShell: the same with `-Tool`, `-Uninstall`. Replaced or removed skills are moved to a
+`<skills folder>-backup/` folder, never deleted outright; the newest 3 backup sets are kept.
+Uninstall never touches your rules file. What changed between versions: [CHANGELOG.md](CHANGELOG.md).
+
 ## Also install (the skills use these)
 
 - **Node.js + git** - required
@@ -79,4 +105,4 @@ Put together by [BrewedOps](https://brewedops.cloud/framework).
 
 ## License
 
-MIT - see [LICENSE](LICENSE). The per-file review rules adapt Apache-2.0 material from open-code-review; details in LICENSE.
+MIT - see [LICENSE](LICENSE). Third-party notes (the Apache-2.0 review rules adapted from open-code-review, and code-structure) are in [NOTICE](NOTICE).
