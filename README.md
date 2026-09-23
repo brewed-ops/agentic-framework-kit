@@ -76,3 +76,7 @@ Framework ideas from [Mickey (Michael Shimeles)](https://github.com/michaelshime
 [Nick Saraev](https://www.youtube.com/@NickSaraev). greploop borrows ideas from Alibaba's
 [open-code-review](https://github.com/alibaba/open-code-review) (Apache-2.0).
 Put together by [BrewedOps](https://brewedops.cloud/framework).
+
+## License
+
+MIT - see [LICENSE](LICENSE). The per-file review rules adapt Apache-2.0 material from open-code-review; details in LICENSE.
