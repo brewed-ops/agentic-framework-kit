@@ -4,6 +4,8 @@ The `since-filter` change from the [benchmark](../benchmark/): a new `?since=<id
 list, 21 lines in 3 files, with a planted off-by-one that the project's own tests do not catch. Every
 command and its output is in [`transcript.txt`](transcript.txt). The final report is [`report.md`](report.md)
 and the fix is [`fix.diff`](fix.diff). Run on 2026-09-24 in Claude Code, with reviewers on Claude Opus 5.5.
+Recorded with kit 1.1.0: from 1.2.0 on, each bundle also gets a `snapshot` before its reviewers are
+dispatched, and `add` takes `--snapshot <hash>` (see the [changelog](../../CHANGELOG.md)).
 
 ## What happened
 

@@ -3,6 +3,33 @@
 Versions follow `MAJOR.MINOR.PATCH`. The installed version is written next to each skills
 folder (`agentic-framework-kit.installed`); `./install.sh --version` prints the kit's.
 
+## 1.2.0 - 2026-09-24
+
+Evidence only counts for the code it actually covered. An outside review of 1.1.0 reproduced three
+ways the runners could report "passed" on evidence from other code. All three are fixed, and each fix
+has a regression test that fails when the fix is taken out.
+
+- **A scan of older code was accepted as current.** `review.mjs scan` stamped the report with the
+  code as it was at import, not at scan time. scanloop now records a content `fingerprint` (sha256 of
+  the diff against the merge-base plus the bytes of every untracked file) and `review.mjs` computes
+  the same value. Import is refused unless the report's merge-base, commit and fingerprint all match
+  the current code. Reports from older scan.mjs versions have no fingerprint and are refused: re-run
+  scanloop.
+- **A file edited after a reviewer replied still counted as reviewed.** The content hash was taken at
+  `merge`. There is a new `snapshot --bundle <id>` command to run before dispatching reviewers.
+  `add` needs `--snapshot <hash>` and refuses a reply if the bundle changed since. `merge` refuses
+  replies whose files changed after `add`, and a re-dispatched reply replaces the stale one. **This
+  breaks 1.1 scripts:** `add` without `--snapshot` now fails.
+- **Untracked files escaped review and freshness checks.** The fingerprint only hashed their names.
+  Now it hashes their contents too. Untracked files that are not gitignored join the change: they
+  are bundled, reviewed and line-counted. scanloop marks an uncommitted tree INCOMPLETE (gitleaks
+  reads commits only) and lists the files in `untracked`, so uncommitted work can never reach
+  "Passed the configured checks".
+- `review.mjs run` ties a check to the code from just before the command ran, so a check that edits
+  files never gets credit for the edited code.
+- scanloop reports INCOMPLETE if files change while it runs.
+- `examples/greploop-run/` was recorded with 1.1.0, so its transcript has no `snapshot` step.
+
 ## 1.1.0 - 2026-09-24
 
 **What "passed" means**
