@@ -7,6 +7,7 @@
 // Tool overrides (for tests or odd installs): SCANLOOP_GITLEAKS / SCANLOOP_SEMGREP / SCANLOOP_OSV
 // hold either a JSON array ["exe", "arg", ...] or a single executable path (spaces allowed).
 import { spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, delimiter, extname, isAbsolute, join, relative, resolve } from 'node:path'
 
@@ -100,6 +101,30 @@ function run(argv, cwd) {
     child.on('error', (e) => { clearTimeout(timer); done({ code: null, spawnError: e.message, out, err }) })
     child.on('close', (code, signal) => { clearTimeout(timer); done({ code, signal, out, err }) })
   })
+}
+
+// Content fingerprint of the change: the diff against the merge-base plus the bytes of every untracked
+// file. greploop's review.mjs computes the same value and refuses to import a report whose fingerprint
+// is not the current code's - keep the two functions identical. outDir: this run's output folder.
+const FP_EXCL = [':(exclude).greploop/run*', ':(exclude).greploop/lock', ':(exclude).scanloop/*.json']
+const OUT_FILES = ['report.json', 'report.json.tmp', 'gitleaks.json', 'semgrep.json', 'osv.json']
+const outExcl = (outDir) => (typeof outDir === 'string' ? OUT_FILES.map((f) => `:(exclude)${outDir ? `${outDir}/` : ''}${f}`) : [])
+function fpGit(args, root) {
+  const r = spawnSync('git', ['-c', 'core.quotepath=off', ...args], { cwd: root, encoding: 'utf8', maxBuffer: 1 << 28 })
+  if (r.status !== 0) usage(`git ${args[0]} failed: ${(r.stderr || '').trim()}`)
+  return r.stdout
+}
+function untrackedFiles(root, outDir) {
+  return fpGit(['ls-files', '-z', '--others', '--exclude-standard', '--', '.', ...FP_EXCL, ...outExcl(outDir)], root).split('\0').filter(Boolean).sort()
+}
+function fingerprint(root, mergeBase, outDir) {
+  const h = createHash('sha256').update('fp2\0')
+  h.update(fpGit(['diff', '--no-color', '--no-ext-diff', '--binary', mergeBase, '--', '.', ...FP_EXCL, ...outExcl(outDir)], root))
+  for (const f of untrackedFiles(root, outDir)) {
+    let bytes; try { bytes = readFileSync(join(root, f)) } catch { bytes = Buffer.from('<unreadable>') }
+    h.update(`\0${f}\0`).update(bytes)
+  }
+  return h.digest('hex')
 }
 
 const firstLine = (s) => (s || '').split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? ''
@@ -300,8 +325,14 @@ async function main() {
   const changed = diff.stdout.split('\0').filter(Boolean).map(toPosix)
   const status = gitOk(['status', '--porcelain', '--untracked-files=no'], root) ?? ''
   const dirty = status.length > 0
+  // What this scan covers, so greploop can refuse a report of other code.
+  const relOutDir = toPosix(relative(root, outDir))
+  const reportOutDir = relOutDir.startsWith('..') || isAbsolute(relOutDir) ? null : relOutDir
+  const untracked = untrackedFiles(root, reportOutDir)
+  const fpStart = fingerprint(root, mergeBase, reportOutDir)
   const notes = []
-  if (dirty) notes.push('working tree has uncommitted changes to tracked files: gitleaks only scans commits, and semgrep runs without --baseline-commit (it aborts on a dirty tree), so pre-existing findings in changed files are included. Commit the change first for a clean diff-only scan.')
+  if (dirty) notes.push('working tree has uncommitted changes to tracked files: semgrep runs without --baseline-commit (it aborts on a dirty tree), so pre-existing findings in changed files are included')
+  if (dirty || untracked.length) notes.push(`not committed: gitleaks reads commits only, so ${dirty ? 'uncommitted edits' : ''}${dirty && untracked.length ? ' and ' : ''}${untracked.length ? `${untracked.length} untracked file(s)` : ''} were not secret-scanned - commit the change and re-run (do not git stash)`)
 
   // Scope per tool
   const semgrepFiles = changed.filter((f) => langPacksFor(f) && existsSync(join(root, f)))
@@ -412,7 +443,11 @@ async function main() {
   for (const f of findings) counts[f.severity]++
   const incompleteTools = required.filter((t) => tools[t].status === 'missing' || tools[t].status === 'error')
   const anyRan = TOOLS.some((t) => tools[t].status === 'ran')
-  const complete = incompleteTools.length === 0 && anyRan
+  const fingerprintNow = fingerprint(root, mergeBase, reportOutDir)
+  const incompleteBecause = incompleteTools.map((t) => `${t}: ${tools[t].status} - ${tools[t].reason}`)
+  if (dirty || untracked.length) incompleteBecause.push(`working tree not committed (${[dirty && 'uncommitted edits to tracked files', untracked.length && `untracked: ${untracked.join(', ')}`].filter(Boolean).join('; ')}) - gitleaks reads commits only; commit and re-run`)
+  if (fingerprintNow !== fpStart) incompleteBecause.push('files changed while the scan ran - re-run on a quiet tree')
+  const complete = incompleteBecause.length === 0 && anyRan
   const verdict = !complete ? 'INCOMPLETE' : counts.blocking + counts.major > 0 ? 'BLOCKING' : 'CLEAN'
   if (!anyRan) notes.push('SCAN NOT PERFORMED: no scanner ran')
 
@@ -425,11 +460,14 @@ async function main() {
     base: { ref: baseRef, sha: baseSha, mergeBase },
     head: { sha: headSha, branch: gitOk(['rev-parse', '--abbrev-ref', 'HEAD'], root) },
     dirty,
+    untracked,
+    fingerprint: fpStart,
+    outDir: reportOutDir,
     fullHistory: opts.fullHistory,
     changedFiles: changed,
     required,
     requiredConfigured,
-    incompleteBecause: incompleteTools.map((t) => `${t}: ${tools[t].status} - ${tools[t].reason}`),
+    incompleteBecause,
     tools,
     counts,
     findings,

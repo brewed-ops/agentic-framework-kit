@@ -54,7 +54,7 @@ node <skill-dir>/scripts/scan.mjs --full-history       # gitleaks over ALL histo
 |---|---|---|
 | 0 | `CLEAN` | every required scanner ran and found no blocking or major issue |
 | 1 | `BLOCKING` | at least one blocking or major finding - hand them to greploop |
-| 2 | `INCOMPLETE` | a required scanner is missing or errored, or no scanner ran - **never report this as clean** |
+| 2 | `INCOMPLETE` | a required scanner is missing or errored, no scanner ran, the working tree is not committed, or files changed during the scan - **never report this as clean** |
 | 2 | (usage) | bad flag, not a git repo, base not found, nothing to scan, bad config.json |
 
 What the runner does, in order:
@@ -81,11 +81,18 @@ What the runner does, in order:
 no findings in the output). Exit 1 with parseable findings is the normal "found something"
 result, not an error. osv-scanner's exit 128 ("no packages in the lockfile") counts as ran, empty.
 
-**Dirty tree:** gitleaks only scans commits, and semgrep aborts `--baseline-commit` on unstaged
-changes - so on a dirty tree the runner drops the baseline (pre-existing findings in the changed
-files show up too) and says so in `notes`. **Commit the in-scope change first - do NOT `git
+**Uncommitted tree = INCOMPLETE.** gitleaks only scans commits, so an uncommitted edit or an
+untracked file (not gitignored) was never secret-scanned. The runner still runs (semgrep drops
+`--baseline-commit` on a dirty tree, since it aborts otherwise), lists the files in `untracked` and
+`incompleteBecause`, and returns INCOMPLETE. **Commit the in-scope change first - do NOT `git
 stash`.** In a repo shared by several projects, stash reverts every project's uncommitted work
-and `pop` can fail to restore it.
+and `pop` can fail to restore it. Gitignore scratch files so they do not count.
+
+**What was scanned.** The report records `fingerprint`: a sha256 of the diff against the merge-base
+plus the bytes of every untracked file, taken before the scanners start (and checked again after -
+a change mid-scan is INCOMPLETE). greploop's `review.mjs scan` recomputes it and refuses a report
+whose merge-base, commit or fingerprint is not the current code's, so a report of older code can
+never count as this scan.
 
 ### Required tools and config
 
@@ -141,7 +148,8 @@ the path are fine; it is never split).
 ```
 verdict, complete          CLEAN | BLOCKING | INCOMPLETE, and whether every required tool ran
 startedAt, finishedAt
-base {ref, sha, mergeBase}, head {sha, branch}, dirty, fullHistory, changedFiles
+base {ref, sha, mergeBase}, head {sha, branch}, dirty, untracked[], fullHistory, changedFiles
+fingerprint, outDir        what was scanned (sha256, see above) and where the outputs went
 required, requiredConfigured, incompleteBecause
 tools.<name>               status, required, version, command, exitCode, reason, findings,
                            (semgrep) configs, pinned, baseline
@@ -149,7 +157,7 @@ counts {blocking, major, minor}
 findings[]                 greploop's finding shape (Step 3)
 suppressed {total, byEntry[] with a per-entry suppressed count}
 allowlistProblems[]        entries that did NOT suppress: invalid | expired
-notes[]                    dirty tree, unpinned rules, package.json without lockfile, ...
+notes[]                    uncommitted tree, unpinned rules, package.json without lockfile, ...
 ```
 
 Add the outputs to `.gitignore` (keep config and allowlist committed):

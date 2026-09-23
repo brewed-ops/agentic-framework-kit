@@ -75,7 +75,11 @@ function scan(dir, tools = {}, args = []) {
   return { code: r.status, report, stderr: r.stderr }
 }
 
-const allow = (dir, yml) => { mkdirSync(join(dir, '.scanloop'), { recursive: true }); writeFileSync(join(dir, '.scanloop', 'allowlist.yml'), yml) }
+// The allowlist is committed, as the skill says - an untracked one would make the scan INCOMPLETE.
+const allow = (dir, yml) => {
+  mkdirSync(join(dir, '.scanloop'), { recursive: true }); writeFileSync(join(dir, '.scanloop', 'allowlist.yml'), yml)
+  sh(dir, 'add', '-A'); sh(dir, 'commit', '-q', '-m', 'allowlist')
+}
 const cleanup = (dir) => rmSync(join(dir, '..'), { recursive: true, force: true, maxRetries: 3 })
 
 test('all clean -> exit 0 CLEAN, versions and commands recorded', () => {
@@ -91,6 +95,39 @@ test('all clean -> exit 0 CLEAN, versions and commands recorded', () => {
   assert.match(report.head.sha, /^[0-9a-f]{40}$/)
   assert.match(report.base.sha, /^[0-9a-f]{40}$/)
   assert.ok(report.startedAt)
+  cleanup(dir)
+})
+
+test('the report records what it scanned: base, commit and a content fingerprint', () => {
+  const dir = repo({ 'app.js': 'console.log(1)\n' })
+  const a = scan(dir).report
+  assert.match(a.fingerprint, /^[0-9a-f]{64}$/)
+  assert.equal(a.outDir, '.scanloop')
+  assert.deepEqual(a.untracked, [])
+  assert.equal(scan(dir).report.fingerprint, a.fingerprint, 'same code, same fingerprint')
+  writeFileSync(join(dir, 'app.js'), 'console.log(2)\n')
+  sh(dir, 'commit', '-qam', 'edit')
+  assert.notEqual(scan(dir).report.fingerprint, a.fingerprint, 'new content, new fingerprint')
+  cleanup(dir)
+})
+
+test('an untracked file or an uncommitted edit -> INCOMPLETE (gitleaks reads commits only)', () => {
+  const dir = repo({ 'app.js': 'console.log(1)\n' })
+  writeFileSync(join(dir, 'extra.js'), 'const k = 1\n')
+  const u = scan(dir)
+  assert.equal(u.code, 2)
+  assert.equal(u.report.verdict, 'INCOMPLETE')
+  assert.deepEqual(u.report.untracked, ['extra.js'])
+  assert.match(u.report.incompleteBecause.join(' '), /not committed .*untracked: extra\.js/)
+  const before = u.report.fingerprint
+  writeFileSync(join(dir, 'extra.js'), 'const k = 2\n')
+  assert.notEqual(scan(dir).report.fingerprint, before, 'an untracked file\'s contents are in the fingerprint')
+  rmSync(join(dir, 'extra.js'))
+  writeFileSync(join(dir, 'app.js'), 'console.log(3)\n')
+  const d = scan(dir)
+  assert.equal(d.code, 2)
+  assert.equal(d.report.dirty, true)
+  assert.match(d.report.incompleteBecause.join(' '), /uncommitted edits to tracked files/)
   cleanup(dir)
 })
 
