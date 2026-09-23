@@ -1,0 +1,35 @@
+name: CI
+
+# Go. Every push to main and every PR: vet, test, build on Linux.
+# CI never deploys and holds no production credentials.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      # The exact Go version comes from go.mod, so CI and your machine agree.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go mod verify
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Build
+        run: go build ./...

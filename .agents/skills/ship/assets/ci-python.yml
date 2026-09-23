@@ -1,0 +1,34 @@
+name: CI
+
+# Python (uv). Every push to main and every PR: install from the lockfile on Linux, lint, test.
+# CI never deploys and holds no production credentials.
+# Third-party actions are pinned to a commit (tag in the comment) - tags can be moved.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      # --locked fails if uv.lock does not match pyproject.toml, the same guarantee as `npm ci`.
+      - run: uv sync --locked --all-extras --dev
+      - name: Lint
+        run: uv run --with ruff ruff check .
+      - name: Test
+        run: uv run pytest
