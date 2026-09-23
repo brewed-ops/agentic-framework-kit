@@ -1,6 +1,6 @@
 ---
 name: greploop
-description: Automated code-review loop. The diff is split into bundles of related files; each pass dispatches a PANEL of fresh strict-reviewer subagents per bundle (correctness / security+contracts / quality-gates) that read the changed files in full, apply per-file-type rules, score 1-5 with snippet-anchored findings, and the main agent applies the fixes - re-reviewing from clean context until the panel agrees 5/5 with zero blocking/major findings, or 5 iterations max. Use when the user says "/greploop", "review loop", "loop until 5/5", "auto-fix this PR", or wants a PR/branch driven to a clean review without leaving the terminal. No external review service required - the reviewers are fresh subagents (or fresh sessions) of whatever AI coding tool you use.
+description: Automated code-review loop. The diff is split into bundles of related files; each pass dispatches a PANEL of fresh strict-reviewer subagents per bundle (correctness / security+contracts / quality-gates) that read the changed files in full, apply per-file-type rules, score 1-5 with snippet-anchored findings, and the main agent applies the fixes - re-reviewing from clean context until the panel agrees 5/5 with zero blocking/major findings, or 5 iterations max. Small low-risk changes (about 40 lines or docs-only) use a quick mode: scanloop plus one reviewer, one round. Use when the user says "/greploop", "review loop", "loop until 5/5", "auto-fix this PR", or wants a PR/branch driven to a clean review without leaving the terminal. No external review service required - the reviewers are fresh subagents (or fresh sessions) of whatever AI coding tool you use.
 ---
 
 # greploop - local review loop (no paid reviewer)
@@ -69,6 +69,18 @@ NOT re-implement that scanning; it treats any scanloop finding as a pre-seeded b
    iterations - report the bundle list and recommend splitting the PR; proceed only if the user
    explicitly says to.
 6. Capture the diff once at the top of each iteration (it changes as you fix).
+7. **Pick the mode.** Use **quick mode** when the change is small AND low-risk:
+   - at most ~40 changed lines in at most 3 files, OR only docs/copy (`.md`, `.txt`, UI text
+     strings, comments) with no logic change; AND
+   - it touches none of: auth/permissions, payments, database schema or migrations, security
+     headers/config, secrets handling, CI/deploy config, dependency manifests or lockfiles.
+
+   Quick mode = run scanloop, then ONE fresh reviewer who covers all three lenses at once
+   (correctness, security/contracts, house rules) with the same JSON shape, for ONE round. Fix
+   what it finds. Exit when it scores 5 with no blocking/major findings. If it finds any
+   blocking or major issue, or scores 3 or lower, escalate to the full panel below - a small
+   diff that turns out to be risky gets the full review. The user can always ask for the full
+   panel ("full review"). Anything else runs the full panel.
 
 ## Step 1 - Load review criteria
 
