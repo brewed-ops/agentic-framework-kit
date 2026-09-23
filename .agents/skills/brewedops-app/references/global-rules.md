@@ -46,7 +46,8 @@ Where this file goes depends on your tool (the installer can place it for you):
 3. **scanloop** - scan the diff for secrets, injection patterns and vulnerable dependencies.
    Every secret found is blocking.
 4. **greploop** - review panel scores the diff 1-5; fix every blocking and major finding and
-   re-review until 5/5.
+   re-review until none is left. Its report says which checks ran and what was not covered -
+   "passed the configured checks", never "no bugs".
 5. Commit, push, and wait for CI to pass. That is "done" - not "live".
 
 ## Shipping (ship skill)

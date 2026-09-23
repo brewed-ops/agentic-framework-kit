@@ -18,13 +18,13 @@ search and fix; the user decides what to build and what ships.
 | opensrc | Real package source, so you stop guessing APIs | global CLI |
 | code-structure | One clean version of each thing | skill |
 | scanloop | Free local secret + SAST + dependency scan of the diff | skill |
-| greploop | Review panel that loops fixes until 5/5 | skill |
+| greploop | Review panel that loops fixes until no blocking or major finding is left | skill |
 | ship | CI on every push; deploys only on the user's go, through a checklist | skill |
 
 **The build loop**, one small piece at a time: decide one small thing -> read real source with
 opensrc -> **write a check that fails first** (a test; for UI, a browser script or screenshot that
 shows the change missing) -> build until it passes (you type, the user steers) -> code-structure
-tidies -> clarity pass -> scanloop -> greploop to 5/5 -> commit, push, CI green -> next piece.
+tidies -> clarity pass -> scanloop -> greploop -> commit, push, CI green -> next piece.
 Writing the check first proves it can fail; a test written after the code often only proves
 the code does what the code does. Nothing goes live until the
 user says "deploy", and then it goes through the `ship` skill.
@@ -87,14 +87,19 @@ Never default to React/Vite.
    flags with opensrc or `--help` - do not guess.
 2. Write the project instructions file from `references/project-agents-md.template.md` as
    `AGENTS.md` at the project root. Fill every `{{PLACEHOLDER}}`; anything unknown stays `TBD`.
+   `{{STRUCTURE_RULES}}` and `{{TEST_COMMAND}}` come from the chosen stack's row in
+   `references/tech-stacks.md` ("Structure per stack") - never a React layout for a Python app.
    Then add your tool's pointer to it:
    - Claude Code: a `CLAUDE.md` containing the single line `@AGENTS.md`
    - Gemini CLI: `.gemini/settings.json` with `{"context":{"fileName":["AGENTS.md","GEMINI.md"]}}`
    - Codex, Cursor, Antigravity, Copilot: nothing - they read `AGENTS.md` directly
-3. Wire CI and the deploy rails from the `ship` skill (section 1): copy `ci.yml` + `relock.yml`
-   into `.github/workflows/`, `check-node-pin.mjs` + `write-version.mjs` + `preflight-deploy.mjs`
-   into `scripts/`, add `"prebuild"` / `"postbuild"`, `npm i -D semver`, write an exact `.nvmrc`.
-   Non-Node stacks: adapt the CI commands and skip the Node-only scripts.
+3. Wire CI and the deploy rails from the `ship` skill (section 1). Node: copy `ci.yml` +
+   `relock.yml` into `.github/workflows/`, `check-node-pin.mjs` + `write-version.mjs` +
+   `preflight-deploy.mjs` into `scripts/`, add `"prebuild"` / `"postbuild"`, `npm i -D semver`,
+   write an exact `.nvmrc`. Python, Go, Rust: copy `ci-python.yml`, `ci-go.yml` or `ci-rust.yml`
+   as `.github/workflows/ci.yml`, plus `write-version.sh` (run it after the build) and
+   `preflight-deploy.mjs` into `scripts/`. Other stacks: start from the closest template and keep
+   its lint, test and build steps - CI that runs no tests is not a check.
 4. `git init` if needed, a stack-appropriate `.gitignore`, and one commit:
    `chore: scaffold <stack> + framework AGENTS.md + CI`. Push only if the user asks. After the
    first push, confirm CI actually ran green (`gh run list --limit 1`) - a workflow that never
@@ -109,7 +114,7 @@ Say:
 > Framework wired. We build one small piece at a time: you name it -> I read the real source
 > with opensrc -> write a failing check -> build until it passes while you steer ->
 > code-structure tidies -> clarity pass -> scanloop
-> scans -> greploop reviews to 5/5 -> commit, push, CI green. Nothing goes live until you say
+> scans -> greploop reviews until no blocking or major issue is left -> commit, push, CI green. Nothing goes live until you say
 > "deploy". What is the first small thing?
 
 Then stop and wait. Do not start building a feature on your own.

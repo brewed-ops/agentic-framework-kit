@@ -34,7 +34,8 @@ build loop after each piece, and never deploys outside the ship gate. Do not tri
    no clever one-liners, no refactoring of untouched code.
 3. **scanloop skill**: gitleaks + semgrep + osv-scanner on the diff. Every secret is blocking.
 4. **greploop skill**: review panel scores 1-5; fix blocking + major findings, re-review from a
-   fresh context until 5/5. Keep diffs small - a big diff never converges.
+   fresh context until no blocking or major finding is left. Keep diffs small - a big diff
+   never converges.
 5. Commit, push, CI green. That is "done". It is not "live".
 
 ## CI and deploy (ship skill)

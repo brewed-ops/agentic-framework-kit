@@ -10,7 +10,7 @@ The user is the boss: they decide what gets built and what ships. You do the typ
 | Path | What it is |
 |---|---|
 | `.agents/skills/brewedops-app/` | Bootstrap: sets up a new project the framework way (stack, CI, project AGENTS.md) |
-| `.agents/skills/greploop/` | Review loop: a panel of 3 reviewers scores each change 1-5; fix and re-review until 5/5 |
+| `.agents/skills/greploop/` | Review loop: a panel of 3 reviewers scores each change 1-5; fix and re-review until no blocking or major finding is left |
 | `.agents/skills/scanloop/` | Free local scan of each change: secrets (gitleaks), code patterns (semgrep), vulnerable dependencies (osv-scanner) |
 | `.agents/skills/ship/` | CI setup + the careful deploy gate (preflight script, rollback first, prove it live) |
 | `.agents/skills/brewedops-app/references/global-rules.md` | Starter global rules file for the user |
@@ -66,7 +66,7 @@ https://github.com/michaelshimeles/skills.
   asks what the app is for, recommends a stack, sets up CI, and writes the project's AGENTS.md.
 - **Every small piece of work:** read real package source with opensrc -> write a failing
   test or check -> build until it passes -> code-structure -> clarity pass -> scanloop ->
-  greploop to 5/5 -> commit, push, CI green.
+  greploop -> commit, push, CI green.
 - **Deploying:** only when the user says "deploy" for that change, and only through the `ship`
   skill: preflight check, rollback prepared, safe upload order, prove it is live.
 
