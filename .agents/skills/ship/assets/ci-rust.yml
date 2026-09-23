@@ -3,6 +3,9 @@ name: CI
 # Rust. Every push to main and every PR: format check, lint, test on Linux.
 # CI never deploys and holds no production credentials.
 # Third-party actions are pinned to a commit (ref in the comment) - branches and tags can move.
+# A green run means lint and tests RAN. No tests yet, on purpose? Delete the Require tests and Test steps,
+# then add `Tests: none - <reason>` to AGENTS.md so the choice is visible (preflight reports it).
+# The workflow `name: CI` and the job `name:` are what preflight-deploy.mjs --require checks by.
 
 on:
   push:
@@ -19,6 +22,7 @@ concurrency:
 
 jobs:
   check:
+    name: Format, lint, test
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -33,5 +37,12 @@ jobs:
         run: cargo fmt --all --check
       - name: Lint
         run: cargo clippy --locked --all-targets -- -D warnings
+      # `cargo test` passes when the crate has no tests at all. Fail instead.
+      - name: Require tests
+        run: |
+          if ! grep -rqE --include='*.rs' --exclude-dir=target '#\[([A-Za-z_]+::)*test\b' .; then
+            echo "::error::No #[test] functions - cargo test would pass without testing anything. Add a test, or opt out (see the top of this file)."
+            exit 1
+          fi
       - name: Test
         run: cargo test --locked

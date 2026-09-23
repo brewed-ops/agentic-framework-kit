@@ -3,6 +3,9 @@ name: CI
 # Python (uv). Every push to main and every PR: install from the lockfile on Linux, lint, test.
 # CI never deploys and holds no production credentials.
 # Third-party actions are pinned to a commit (tag in the comment) - tags can be moved.
+# A green run means lint and tests RAN. No tests yet, on purpose? Delete the Test step and
+# add a line `Tests: none - <reason>` to AGENTS.md, so the choice is visible (preflight reports it).
+# The workflow `name: CI` and the job `name:` are what preflight-deploy.mjs --require checks by.
 
 on:
   push:
@@ -19,6 +22,7 @@ concurrency:
 
 jobs:
   check:
+    name: Lint, test
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -30,5 +34,6 @@ jobs:
       - run: uv sync --locked --all-extras --dev
       - name: Lint
         run: uv run --with ruff ruff check .
+      # pytest exits 5 when it collects no tests, so an empty suite fails here.
       - name: Test
         run: uv run pytest

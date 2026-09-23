@@ -8,6 +8,10 @@ name: CI
 # Single package at the repo root. For a server/ + web/ split, copy the job once per
 # folder and set `defaults.run.working-directory` + `cache-dependency-path`
 # (one job per package folder).
+#
+# A green run means lint and tests RAN. No tests yet, on purpose? Delete the Test step and
+# add a line `Tests: none - <reason>` to AGENTS.md, so the choice is visible (preflight reports it).
+# The workflow `name: CI` and the job `name:` are what preflight-deploy.mjs --require checks by.
 
 on:
   push:
@@ -25,6 +29,7 @@ concurrency:
 
 jobs:
   check:
+    name: Lint, test, build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -38,11 +43,13 @@ jobs:
 
       - run: npm ci
 
+      # No --if-present: `npm run lint` and `npm test` exit 1 when the script is missing,
+      # so a project without them fails here instead of passing untested.
       - name: Lint
-        run: npm run lint --if-present
+        run: npm run lint
 
       - name: Test
-        run: npm test --if-present
+        run: npm test
 
       # `prebuild` runs scripts/check-node-pin.mjs; a Vite/TS build also typechecks.
       - name: Build

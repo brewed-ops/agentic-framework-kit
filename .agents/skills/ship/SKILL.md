@@ -25,7 +25,9 @@ fixed order. Every rule below exists because skipping it broke a real production
 **Record the target.** Add a `## Deploy` section to the project instructions file (AGENTS.md or
 your tool's equivalent): target, live URL, server path / process name, deploy command, rollback
 command. Unknowns stay `TBD` - never invent a server path; read it from the server on the first
-deploy.
+deploy. Where each host keeps build settings and env vars, how it rolls back and one gotcha
+each (Cloudflare Pages, Vercel, Netlify, Render, Railway, Fly.io, GitHub Pages, Docker, VPS):
+[references/hosts.md](references/hosts.md).
 
 | App shape | Good default target | Why |
 |---|---|---|
@@ -34,10 +36,24 @@ deploy.
 | Heavy Next.js SSR/ISR | Vercel (paid plan for commercial use) | Built for it; the free plan forbids commercial use and caps crons at daily |
 | Browser extension | Store zip built from a release copy | Never zip the dev/test folder - test labels and flags leak |
 
-**Add CI** (Node projects; copy from this skill's `assets/`):
+**Set up secrets before the first deploy.** `.env` in `.gitignore`, a `.env.example` with names
+only, one config module that reads them, production values only in the host's settings, and a
+gitleaks scan of the whole history before the first push: [references/secrets-and-env.md](references/secrets-and-env.md).
+
+**Add CI** (copy from this skill's `assets/`):
 - `assets/ci.yml` -> `.github/workflows/ci.yml`. Every push to `main` and every PR: `npm ci` on
   Linux, lint, test, build. A lockfile written by npm on Windows can be rejected by `npm ci` on
   Linux - CI finds that in minutes instead of on deploy day.
+- Other stacks: copy ONE of `assets/ci-python.yml` (uv + ruff + pytest), `assets/ci-go.yml`
+  (vet, test, build; Go version from `go.mod`) or `assets/ci-rust.yml` (fmt, clippy, test) to
+  `.github/workflows/ci.yml` instead. The Node-only files below (relock, Node pin,
+  `write-version.mjs`) do not apply; use `write-version.sh` for the version stamp.
+- Every template is a workflow named `CI` with one job whose `name:` says what it proves (for
+  example `Lint, test, build`). Keep those names: the preflight requires checks BY NAME. A green
+  run means lint and tests actually ran - there is no `--if-present`, and the Go and Rust
+  templates fail when the project has no tests at all. A project with no tests yet on purpose
+  deletes the test step(s) and writes `Tests: none - <reason>` in AGENTS.md, so the choice is
+  visible and the preflight reports it.
 - `assets/relock.yml` -> `.github/workflows/relock.yml`. Regenerates `package-lock.json` on Linux
   and commits it. After ANY dependency change: `gh workflow run relock.yml`, then `git pull`, then
   `gh workflow run ci.yml` (a bot's push does not trigger other workflows).
@@ -47,7 +63,9 @@ deploy.
   Needs `semver` as a devDependency.
 - `assets/write-version.mjs` -> `scripts/`, wired as `"postbuild"` (pass the output folder if it
   is not `dist`). Writes `version.json` = `{"commit", "builtAt"}` into the build, so "what is
-  live?" has a factual answer.
+  live?" has a factual answer. Any other stack: `assets/write-version.sh` -> `scripts/`, run
+  right after the build as `sh scripts/write-version.sh <output-folder>` (needs only git and a
+  POSIX shell).
 - `scripts/preflight-deploy.mjs` -> the project's `scripts/`. The mechanical half of the gate.
 - CI never deploys and never holds production credentials. Deploys run from the user's machine,
   where a human can stop them.
@@ -62,13 +80,24 @@ Deploy from an explicit allow-list of paths, never a glob.
 
 Run `node scripts/preflight-deploy.mjs --live <url>` from the project root (`--first-deploy` if
 nothing is live yet, `--path <folder>` inside a monorepo, `--no-ci` only if the repo truly has no
-CI - and say so in the report). It checks items 1-4 and exits 1 on any failure. Items 5-10 are
-judgment: report each as PASS or N/A with one line of evidence.
+CI - and say so in the report). It fetches the remote first, checks items 1-4 and exits 1 on any
+failure. Items 5-10 are judgment: report each as PASS or N/A with one line of evidence.
+
+`--require <name>` (repeatable) names each check that must be green on this commit - a workflow
+name or a job name. The default is `CI`, the workflow name every template here uses; a repo
+whose workflow has another name passes it explicitly (`--require "Check kit"`). Record the exact
+`--require` list in the project's `## Deploy` section so every deploy checks the same jobs.
 
 1. **Committed.** No uncommitted changes in the app. Deploy from a commit, never a working tree.
    If live was built from uncommitted files, commit them first or the next build reverts them.
-2. **Pushed.** The commit is on the remote, so what ships can always be recovered.
-3. **CI green on this exact commit.** Not the previous commit, not "it passed locally".
+2. **Pushed.** The commit is on the remote, so what ships can always be recovered. Checked
+   against freshly fetched refs; if the fetch fails, this FAILS - stale refs prove nothing.
+3. **CI green on this exact commit.** Every required check ran on THIS commit and passed. A
+   required check that never ran, is still running, failed, was cancelled or was skipped FAILS,
+   and so does any other failing run on the commit. Not the previous commit, not "it passed
+   locally". The **Tests** line then reads the committed workflows: PASS names the test command
+   CI runs, WARN means CI has no test step (green does not mean tested) or reports a declared
+   `Tests: none` policy, FAIL means the test command has `--if-present`.
 4. **Scope known.** The preflight lists every commit between live `version.json` and HEAD. That
    list is what goes live - not just "my fix". Name unreleased or unreviewed work riding along to
    the user BEFORE upload. It also FAILS if live holds commits HEAD lacks: deploying would
@@ -96,12 +125,16 @@ judgment: report each as PASS or N/A with one line of evidence.
   Postgres/Supabase: a dump or a point-in-time marker.
 - Server file: `cp <file> /root/<file>.bak-<timestamp>`.
 - Write the exact restore command into the report BEFORE the upload.
+- A schema change needs more than a backup: expand/contract, a dry run on a copy of production
+  data, a way back for every migration, and the migration running before the code that needs
+  it. Follow [references/migrations.md](references/migrations.md).
 
 ---
 
 ## 3. Deploy - order matters
 
-- **API before client** when both change.
+- **Migration before API before client** when they change: an additive (expand) migration first,
+  so the code already live keeps working against it ([references/migrations.md](references/migrations.md)).
 - **Upload an archive, not a recursive copy.** `scp -r dir/.` from Windows can fail halfway and
   look like success. Tar it, upload the archive, extract on the server. In Git Bash give tar
   `--force-local` when the path has a drive letter, or `C:/...` is read as a remote host and no

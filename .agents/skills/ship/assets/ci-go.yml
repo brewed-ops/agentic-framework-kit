@@ -2,6 +2,9 @@ name: CI
 
 # Go. Every push to main and every PR: vet, test, build on Linux.
 # CI never deploys and holds no production credentials.
+# A green run means lint and tests RAN. No tests yet, on purpose? Delete the Require tests and Test steps,
+# then add `Tests: none - <reason>` to AGENTS.md so the choice is visible (preflight reports it).
+# The workflow `name: CI` and the job `name:` are what preflight-deploy.mjs --require checks by.
 
 on:
   push:
@@ -18,6 +21,7 @@ concurrency:
 
 jobs:
   check:
+    name: Vet, test, build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -29,6 +33,13 @@ jobs:
       - run: go mod verify
       - name: Vet
         run: go vet ./...
+      # `go test ./...` passes when there are no _test.go files at all. Fail instead.
+      - name: Require tests
+        run: |
+          if [ -z "$(find . -name '*_test.go' -not -path './vendor/*' | head -n 1)" ]; then
+            echo "::error::No *_test.go files - go test would pass without testing anything. Add a test, or opt out (see the top of this file)."
+            exit 1
+          fi
       - name: Test
         run: go test ./...
       - name: Build
