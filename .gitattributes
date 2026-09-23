@@ -1,0 +1,2 @@
+# Keep LF everywhere so install.sh runs in bash on every OS, whatever core.autocrlf says.
+* text=auto eol=lf

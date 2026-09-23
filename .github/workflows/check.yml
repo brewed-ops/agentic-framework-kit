@@ -1,0 +1,64 @@
+name: Check kit
+
+# Lints the kit and runs both installers for real in a throwaway home folder, so a broken
+# install is caught here instead of on someone's machine.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-install-bash:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Lint the kit
+        run: node scripts/check-kit.mjs
+      - name: Shell syntax
+        run: bash -n install.sh
+      - name: Install for every tool into a temp home
+        run: |
+          export HOME="$(mktemp -d)"
+          ./install.sh --tool all --rules
+          ./install.sh --tool codex --rules          # second run must back up, not clobber
+          for d in .claude/skills .agents/skills .gemini/config/skills .gemini/antigravity-cli/skills; do
+            for s in brewedops-app greploop scanloop ship code-structure; do
+              test -f "$HOME/$d/$s/SKILL.md" || { echo "missing $d/$s"; exit 1; }
+            done
+          done
+          test -d "$HOME/.agents/skills-backup" || { echo "rerun did not back up"; exit 1; }
+          ! ls "$HOME/.agents/skills" | grep -q backup || { echo "backup leaked into skills folder"; exit 1; }
+          grep -q "agentic-framework-kit: global rules" "$HOME/.codex/AGENTS.md"
+
+  install-powershell:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install for every tool into a temp home (PowerShell 7)
+        shell: pwsh
+        run: |
+          $h = Join-Path $env:RUNNER_TEMP 'home'
+          ./install.ps1 -Tool all -Rules -HomeDir $h
+          foreach ($s in 'brewedops-app','greploop','scanloop','ship','code-structure') {
+            if (-not (Test-Path (Join-Path $h ".agents\skills\$s\SKILL.md"))) { throw "missing $s" }
+          }
+      - name: Same on Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $h = Join-Path $env:RUNNER_TEMP 'home51'
+          ./install.ps1 -Tool claude -Rules -NoCodeStructure -HomeDir $h
+          if (-not (Test-Path (Join-Path $h '.claude\skills\greploop\SKILL.md'))) { throw 'missing greploop' }

@@ -1,0 +1,43 @@
+name: Relock
+
+# Regenerates package-lock.json on Linux and commits it. Run this after ANY
+# dependency change instead of trusting a lock written on Windows: npm there never
+# records the wasm32-wasi optional variants (@emnapi/*), so `npm ci` rejects the
+# lock on every Linux checkout - CI, Cloudflare Pages, Vercel, the VPS.
+#
+# Run:  gh workflow run relock.yml
+# Then: git pull  &&  gh workflow run ci.yml   (a bot push triggers no other workflow)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  relock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+
+      - name: Regenerate the lock
+        run: npm install --package-lock-only --no-audit --no-fund
+
+      - name: Confirm npm ci now accepts it
+        run: npm ci --no-audit --no-fund
+
+      - name: Commit the regenerated lock
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "lock already correct - nothing to commit"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "chore: regenerate package lock on Linux"
+          git push

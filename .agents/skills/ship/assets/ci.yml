@@ -1,0 +1,49 @@
+name: CI
+
+# Proves every push to main and every PR on a clean Linux machine. `npm ci` here is
+# the point: a lockfile written by Windows npm that Linux rejects fails in minutes,
+# not at deploy time. CI never deploys and holds no production credentials - deploys
+# are a separate step a human approves, after preflight-deploy.mjs passes.
+#
+# Single package at the repo root. For a server/ + web/ split, copy the job once per
+# folder and set `defaults.run.working-directory` + `cache-dependency-path`
+# (one job per package folder).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push makes an in-flight run pointless - cancel it rather than queue.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      # The exact Node the host will install. .nvmrc must be a full version.
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Test
+        run: npm test --if-present
+
+      # `prebuild` runs scripts/check-node-pin.mjs; a Vite/TS build also typechecks.
+      - name: Build
+        run: npm run build
