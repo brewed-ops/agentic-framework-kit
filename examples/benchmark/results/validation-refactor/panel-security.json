@@ -1,0 +1,44 @@
+{
+  "lens": "security",
+  "score": 1,
+  "summary": "The refactor drops the 500-character length limit on notes, so unbounded text can be stored, and it deletes the test that caught it. Files read: src/store.mjs and test/notes.test.mjs in full, main:src/store.mjs as the base, and the callers src/server.mjs (POST /notes -> store.create), src/client.mjs (add) and test/helpers.mjs. grep for MAX_TEXT and validateText finds no other users.",
+  "coverage": {
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/store.mjs:4-6",
+      "code": "function validateText(text) {\n  if (typeof text !== 'string' || !text.trim()) throw new StoreError(400, 'text is required')\n}",
+      "issue": "This is labeled a refactor but it changes behavior. The base create() also rejected text longer than MAX_TEXT with a 400 ('text is longer than 500 characters'). That check was not carried into validateText(), so POST /notes now accepts text of any length. Every note stays in the in-memory Map for the life of the process, so any valid token holder can grow memory without limit (a denial-of-service path). It also breaks the API contract: outside callers that relied on the 400 for text over 500 characters now get a 201.",
+      "fix": "Move the length check into validateText(): `if (text.length > MAX_TEXT) throw new StoreError(400, `text is longer than ${MAX_TEXT} characters`)` right after the empty/type check, so the refactor keeps the same behavior."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:29-33",
+      "code": "test('empty notes are rejected', async () => {\n  const app = await startApp()\n  try {\n    assert.equal((await raw(app.base, 'POST', '/notes', { body: JSON.stringify({ text: '' }) })).status, 400)\n    assert.equal((await raw(app.base, 'POST', '/notes', { body: JSON.stringify({ text: '   ' }) })).status, 400)",
+      "issue": "The test was weakened so the regression would pass. The assertion that a 501-character note returns 400 was removed and the test renamed to leave out 'too-long'. This breaks the house rule 'never weaken a test to make it pass'. Nothing now covers the length limit.",
+      "fix": "Put back `assert.equal((await raw(app.base, 'POST', '/notes', { body: JSON.stringify({ text: 'x'.repeat(501) }) })).status, 400)` and the name 'empty and too-long notes are rejected'. Keeping the new whitespace-only assertion is fine. Adding a check that exactly 500 characters returns 201 would pin the boundary."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:2",
+      "code": "const MAX_TEXT = 500",
+      "issue": "MAX_TEXT is now dead code: nothing reads it after the length check was dropped. It makes the file look like a limit is still enforced when none is.",
+      "fix": "Resolved by the first fix, which makes validateText() read MAX_TEXT again. Do not delete the constant."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:44-45",
+      "code": "const body = await readJson(req)\n        return send(res, 201, store.create(user, body.text))",
+      "issue": "A JSON body of `null` makes JSON.parse return null, so body.text throws a TypeError. The catch returns a generic 500 instead of a 4xx JSON error, which breaks the house rule that a bad request gets a 4xx."
+    },
+    {
+      "file": "src/server.mjs:16",
+      "code": "req.on('data', (chunk) => { raw += chunk })",
+      "issue": "readJson() buffers the whole request body with no size cap, even before any text-length check runs. An authenticated caller can send a very large body to use up memory."
+    }
+  ]
+}

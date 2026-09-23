@@ -1,0 +1,254 @@
+{
+  "delete-endpoint/panel-correctness.json#0": {
+    "verdict": "seeded",
+    "why": "no owner check before store.remove; proofs/delete-endpoint.test.mjs fails on it"
+  },
+  "delete-endpoint/panel-correctness.json#1": {
+    "verdict": "real",
+    "why": "only the owner's own delete is tested; no cross-user case"
+  },
+  "delete-endpoint/panel-quality.json#0": {
+    "verdict": "seeded",
+    "why": "no owner check before store.remove; proofs/delete-endpoint.test.mjs fails on it"
+  },
+  "delete-endpoint/panel-quality.json#1": {
+    "verdict": "real",
+    "why": "only the owner's own delete is tested; no cross-user case"
+  },
+  "delete-endpoint/panel-security.json#0": {
+    "verdict": "seeded",
+    "why": "no owner check before store.remove; proofs/delete-endpoint.test.mjs fails on it"
+  },
+  "delete-endpoint/panel-security.json#1": {
+    "verdict": "real",
+    "why": "only the owner's own delete is tested; no cross-user case"
+  },
+  "delete-endpoint/single.json#0": {
+    "verdict": "seeded",
+    "why": "no owner check before store.remove; proofs/delete-endpoint.test.mjs fails on it"
+  },
+  "delete-endpoint/single.json#1": {
+    "verdict": "real",
+    "why": "only the owner's own delete is tested; no cross-user case"
+  },
+  "health-endpoint/panel-correctness.json#0": {
+    "verdict": "real",
+    "why": "NOT PLANTED: moving new URL() above the auth check turns an unauthenticated `GET //` from 401 into 500 - confirmed with a raw-socket probe on main (401) and change (500)"
+  },
+  "health-endpoint/panel-quality.json#0": {
+    "verdict": "real",
+    "why": "NOT PLANTED: moving new URL() above the auth check turns an unauthenticated `GET //` from 401 into 500 - confirmed with a raw-socket probe on main (401) and change (500)"
+  },
+  "health-endpoint/panel-security.json#0": {
+    "verdict": "real",
+    "why": "NOT PLANTED: moving new URL() above the auth check turns an unauthenticated `GET //` from 401 into 500 - confirmed with a raw-socket probe on main (401) and change (500)"
+  },
+  "health-endpoint/single.json#0": {
+    "verdict": "real",
+    "why": "NOT PLANTED: moving new URL() above the auth check turns an unauthenticated `GET //` from 401 into 500 - confirmed with a raw-socket probe on main (401) and change (500)"
+  },
+  "list-field-rename/panel-correctness.json#0": {
+    "verdict": "seeded",
+    "why": "items renamed to notes; proofs/list-field-rename.test.mjs shows client.all() throws"
+  },
+  "list-field-rename/panel-correctness.json#1": {
+    "verdict": "real",
+    "why": "the contract assertions were rewritten to the new field and nothing tests client.all()"
+  },
+  "list-field-rename/panel-quality.json#0": {
+    "verdict": "seeded",
+    "why": "items renamed to notes; proofs/list-field-rename.test.mjs shows client.all() throws"
+  },
+  "list-field-rename/panel-quality.json#1": {
+    "verdict": "seeded",
+    "why": "the broken caller of the same defect"
+  },
+  "list-field-rename/panel-quality.json#2": {
+    "verdict": "real",
+    "why": "the contract assertions were rewritten to the new field and nothing tests client.all()"
+  },
+  "list-field-rename/panel-security.json#0": {
+    "verdict": "seeded",
+    "why": "items renamed to notes; proofs/list-field-rename.test.mjs shows client.all() throws"
+  },
+  "list-field-rename/panel-security.json#1": {
+    "verdict": "real",
+    "why": "the contract assertions were rewritten to the new field and nothing tests client.all()"
+  },
+  "list-field-rename/single.json#0": {
+    "verdict": "seeded",
+    "why": "items renamed to notes; proofs/list-field-rename.test.mjs shows client.all() throws"
+  },
+  "list-field-rename/single.json#1": {
+    "verdict": "real",
+    "why": "the contract assertions were rewritten to the new field and nothing tests client.all()"
+  },
+  "persist-to-disk/panel-correctness.json#0": {
+    "verdict": "seeded",
+    "why": "store.save() neither awaited nor caught; proofs/persist-to-disk.test.mjs shows the process dies"
+  },
+  "persist-to-disk/panel-correctness.json#1": {
+    "verdict": "real",
+    "why": "overlapping writeFile calls on one path: Node documents repeated fsPromises.writeFile without waiting as unsafe"
+  },
+  "persist-to-disk/panel-correctness.json#2": {
+    "verdict": "real",
+    "why": "an empty or corrupt file throws at boot; a non-numeric id makes nextId NaN (Math.max with NaN is NaN)"
+  },
+  "persist-to-disk/panel-quality.json#0": {
+    "verdict": "seeded",
+    "why": "store.save() neither awaited nor caught; proofs/persist-to-disk.test.mjs shows the process dies"
+  },
+  "persist-to-disk/panel-quality.json#1": {
+    "verdict": "real",
+    "why": "overlapping writeFile calls on one path: Node documents repeated fsPromises.writeFile without waiting as unsafe"
+  },
+  "persist-to-disk/panel-quality.json#2": {
+    "verdict": "real",
+    "why": "an empty or corrupt file throws at boot; a non-numeric id makes nextId NaN (Math.max with NaN is NaN)"
+  },
+  "persist-to-disk/panel-quality.json#3": {
+    "verdict": "real",
+    "why": "the new test calls the store directly; the HTTP save path and a failed save are untested"
+  },
+  "persist-to-disk/panel-security.json#0": {
+    "verdict": "seeded",
+    "why": "store.save() neither awaited nor caught; proofs/persist-to-disk.test.mjs shows the process dies"
+  },
+  "persist-to-disk/panel-security.json#1": {
+    "verdict": "seeded",
+    "why": "201 sent before the unawaited save; the answer key names both halves"
+  },
+  "persist-to-disk/panel-security.json#2": {
+    "verdict": "real",
+    "why": "overlapping writeFile calls on one path: Node documents repeated fsPromises.writeFile without waiting as unsafe"
+  },
+  "persist-to-disk/panel-security.json#3": {
+    "verdict": "real",
+    "why": "an empty or corrupt file throws at boot; a non-numeric id makes nextId NaN (Math.max with NaN is NaN)"
+  },
+  "persist-to-disk/single.json#0": {
+    "verdict": "seeded",
+    "why": "store.save() neither awaited nor caught; proofs/persist-to-disk.test.mjs shows the process dies"
+  },
+  "persist-to-disk/single.json#1": {
+    "verdict": "real",
+    "why": "same overlapping-write problem, anchored on the writeFile line"
+  },
+  "persist-to-disk/single.json#2": {
+    "verdict": "real",
+    "why": "an empty or corrupt file throws at boot; a non-numeric id makes nextId NaN (Math.max with NaN is NaN)"
+  },
+  "persist-to-disk/single.json#3": {
+    "verdict": "real",
+    "why": "the new test calls the store directly; the HTTP save path and a failed save are untested"
+  },
+  "since-filter/panel-correctness.json#0": {
+    "verdict": "seeded",
+    "why": ">= keeps the note whose id is `since`; proofs/since-filter.test.mjs fails on it"
+  },
+  "since-filter/panel-correctness.json#1": {
+    "verdict": "real",
+    "why": "the added test uses bob's id as the boundary, so it passes with >= and > alike (own tests pass before and after the reference fix)"
+  },
+  "since-filter/panel-quality.json#0": {
+    "verdict": "seeded",
+    "why": ">= keeps the note whose id is `since`; proofs/since-filter.test.mjs fails on it"
+  },
+  "since-filter/panel-quality.json#1": {
+    "verdict": "real",
+    "why": "the added test uses bob's id as the boundary, so it passes with >= and > alike (own tests pass before and after the reference fix)"
+  },
+  "since-filter/panel-quality.json#2": {
+    "verdict": "real",
+    "why": "since=abc becomes 0 and returns every note with 200; AGENTS.md says a bad request returns a 4xx (page/pageSize already fall back the same way)"
+  },
+  "since-filter/panel-security.json#0": {
+    "verdict": "seeded",
+    "why": ">= keeps the note whose id is `since`; proofs/since-filter.test.mjs fails on it"
+  },
+  "since-filter/panel-security.json#1": {
+    "verdict": "real",
+    "why": "the added test uses bob's id as the boundary, so it passes with >= and > alike (own tests pass before and after the reference fix)"
+  },
+  "since-filter/panel-security.json#2": {
+    "verdict": "real",
+    "why": "since=abc becomes 0 and returns every note with 200; AGENTS.md says a bad request returns a 4xx (page/pageSize already fall back the same way)"
+  },
+  "since-filter/single.json#0": {
+    "verdict": "seeded",
+    "why": ">= keeps the note whose id is `since`; proofs/since-filter.test.mjs fails on it"
+  },
+  "since-filter/single.json#1": {
+    "verdict": "real",
+    "why": "the added test uses bob's id as the boundary, so it passes with >= and > alike (own tests pass before and after the reference fix)"
+  },
+  "since-filter/single.json#2": {
+    "verdict": "real",
+    "why": "since=abc becomes 0 and returns every note with 200; AGENTS.md says a bad request returns a 4xx (page/pageSize already fall back the same way)"
+  },
+  "update-endpoint/panel-correctness.json#0": {
+    "verdict": "seeded",
+    "why": "JSON.parse and store.update run in the end callback outside try/catch; proofs/update-endpoint.test.mjs shows the process dies"
+  },
+  "update-endpoint/panel-correctness.json#1": {
+    "verdict": "real",
+    "why": "only the happy path is tested; no bad-body or cross-user PATCH case"
+  },
+  "update-endpoint/panel-quality.json#0": {
+    "verdict": "seeded",
+    "why": "same defect, anchored one line lower"
+  },
+  "update-endpoint/panel-quality.json#1": {
+    "verdict": "real",
+    "why": "only the happy path is tested; no bad-body or cross-user PATCH case"
+  },
+  "update-endpoint/panel-security.json#0": {
+    "verdict": "seeded",
+    "why": "same defect, anchored two lines lower"
+  },
+  "update-endpoint/panel-security.json#1": {
+    "verdict": "real",
+    "why": "only the happy path is tested; no bad-body or cross-user PATCH case"
+  },
+  "update-endpoint/single.json#0": {
+    "verdict": "seeded",
+    "why": "JSON.parse and store.update run in the end callback outside try/catch; proofs/update-endpoint.test.mjs shows the process dies"
+  },
+  "update-endpoint/single.json#1": {
+    "verdict": "real",
+    "why": "only the happy path is tested; no bad-body or cross-user PATCH case"
+  },
+  "validation-refactor/panel-correctness.json#0": {
+    "verdict": "seeded",
+    "why": "validateText drops the 500-character check; proofs/validation-refactor.test.mjs fails on it"
+  },
+  "validation-refactor/panel-correctness.json#1": {
+    "verdict": "seeded",
+    "why": "the too-long assertion was edited out - the second half of the planted defect"
+  },
+  "validation-refactor/panel-quality.json#0": {
+    "verdict": "seeded",
+    "why": "validateText drops the 500-character check; proofs/validation-refactor.test.mjs fails on it"
+  },
+  "validation-refactor/panel-quality.json#1": {
+    "verdict": "seeded",
+    "why": "the too-long assertion was edited out - the second half of the planted defect"
+  },
+  "validation-refactor/panel-security.json#0": {
+    "verdict": "seeded",
+    "why": "validateText drops the 500-character check; proofs/validation-refactor.test.mjs fails on it"
+  },
+  "validation-refactor/panel-security.json#1": {
+    "verdict": "seeded",
+    "why": "the too-long assertion was edited out - the second half of the planted defect"
+  },
+  "validation-refactor/single.json#0": {
+    "verdict": "seeded",
+    "why": "validateText drops the 500-character check; proofs/validation-refactor.test.mjs fails on it"
+  },
+  "validation-refactor/single.json#1": {
+    "verdict": "seeded",
+    "why": "the too-long assertion was edited out - the second half of the planted defect"
+  }
+}

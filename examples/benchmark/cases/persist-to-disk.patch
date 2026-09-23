@@ -1,0 +1,90 @@
+From: bench <bench@example.com>
+Subject: [PATCH] feat: save notes to NOTES_FILE so they survive a restart
+
+---
+ src/server.mjs      |  6 ++++--
+ src/store.mjs       | 18 +++++++++++++++---
+ test/notes.test.mjs | 14 ++++++++++++++
+ 3 files changed, 33 insertions(+), 5 deletions(-)
+
+diff --git a/src/server.mjs b/src/server.mjs
+index e090f3c..96dc249 100644
+--- a/src/server.mjs
++++ b/src/server.mjs
+@@ -42,7 +42,9 @@ export function createApp(store = createStore()) {
+       }
+       if (req.method === 'POST' && url.pathname === '/notes') {
+         const body = await readJson(req)
+-        return send(res, 201, store.create(user, body.text))
++        const note = store.create(user, body.text)
++        store.save()
++        return send(res, 201, note)
+       }
+       if (req.method === 'GET' && idMatch) {
+         const note = store.get(idMatch[1])
+@@ -60,5 +62,5 @@ export function createApp(store = createStore()) {
+ 
+ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+   const port = Number(process.env.PORT ?? 3000)
+-  createServer(createApp()).listen(port, () => console.log(`notes api on :${port}`))
++  createServer(createApp(createStore({ file: process.env.NOTES_FILE }))).listen(port, () => console.log(`notes api on :${port}`))
+ }
+diff --git a/src/store.mjs b/src/store.mjs
+index a2e8d38..727692d 100644
+--- a/src/store.mjs
++++ b/src/store.mjs
+@@ -1,9 +1,16 @@
+-// In-memory notes store. Notes belong to one owner.
++// Notes store, kept in memory and optionally saved to a JSON file. Notes belong to one owner.
++import { existsSync, readFileSync } from 'node:fs'
++import { writeFile } from 'node:fs/promises'
++
+ const MAX_TEXT = 500
+ 
+-export function createStore() {
++export function createStore({ file } = {}) {
+   const notes = new Map()
+   let nextId = 1
++  if (file && existsSync(file)) {
++    for (const note of JSON.parse(readFileSync(file, 'utf8'))) notes.set(note.id, note)
++    nextId = Math.max(0, ...[...notes.keys()].map(Number)) + 1
++  }
+ 
+   function create(owner, text) {
+     if (typeof text !== 'string' || !text.trim()) throw new StoreError(400, 'text is required')
+@@ -28,7 +35,12 @@ export function createStore() {
+     return notes.delete(id)
+   }
+ 
+-  return { create, list, get, remove }
++  async function save() {
++    if (!file) return
++    await writeFile(file, JSON.stringify([...notes.values()]))
++  }
++
++  return { create, list, get, remove, save }
+ }
+ 
+ export class StoreError extends Error {
+diff --git a/test/notes.test.mjs b/test/notes.test.mjs
+index 0d5b488..4822e2a 100644
+--- a/test/notes.test.mjs
++++ b/test/notes.test.mjs
+@@ -54,3 +54,17 @@ test('list pages through only the caller\'s notes', async () => {
+     assert.equal(p1.total, 5)
+   } finally { await app.close() }
+ })
++
++test('notes survive a restart when a file is set', async () => {
++  const { createStore } = await import('../src/store.mjs')
++  const { mkdtempSync } = await import('node:fs')
++  const { join } = await import('node:path')
++  const { tmpdir } = await import('node:os')
++  const file = join(mkdtempSync(join(tmpdir(), 'notes-')), 'notes.json')
++  const first = createStore({ file })
++  first.create('alice', 'kept')
++  await first.save()
++  const second = createStore({ file })
++  assert.equal(second.list('alice').items[0].text, 'kept')
++  assert.equal(second.create('alice', 'next').id, '2')
++})

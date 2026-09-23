@@ -1,0 +1,20 @@
+From: bench <bench@example.com>
+Subject: [PATCH] fix: reference fix for persist-to-disk
+
+---
+ src/server.mjs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/server.mjs b/src/server.mjs
+index 96dc249..eb8e58a 100644
+--- a/src/server.mjs
++++ b/src/server.mjs
+@@ -43,7 +43,7 @@ export function createApp(store = createStore()) {
+       if (req.method === 'POST' && url.pathname === '/notes') {
+         const body = await readJson(req)
+         const note = store.create(user, body.text)
+-        store.save()
++        await store.save()
+         return send(res, 201, note)
+       }
+       if (req.method === 'GET' && idMatch) {

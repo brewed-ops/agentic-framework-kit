@@ -1,0 +1,36 @@
+From: bench <bench@example.com>
+Subject: [PATCH] refactor: name the list field `notes`, matching the resource
+
+---
+ src/store.mjs       | 2 +-
+ test/notes.test.mjs | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/store.mjs b/src/store.mjs
+index a2e8d38..19f7529 100644
+--- a/src/store.mjs
++++ b/src/store.mjs
+@@ -17,7 +17,7 @@ export function createStore() {
+   function list(owner, { page = 1, pageSize = 20 } = {}) {
+     const mine = [...notes.values()].filter((n) => n.owner === owner)
+     const start = (page - 1) * pageSize
+-    return { items: mine.slice(start, start + pageSize), total: mine.length, page, pageSize }
++    return { notes: mine.slice(start, start + pageSize), total: mine.length, page, pageSize }
+   }
+ 
+   function get(id) {
+diff --git a/test/notes.test.mjs b/test/notes.test.mjs
+index 0d5b488..6b20c73 100644
+--- a/test/notes.test.mjs
++++ b/test/notes.test.mjs
+@@ -49,8 +49,8 @@ test('list pages through only the caller\'s notes', async () => {
+     await app.bob.add('b1')
+     const p1 = (await raw(app.base, 'GET', '/notes?page=1&pageSize=2')).body
+     const p3 = (await raw(app.base, 'GET', '/notes?page=3&pageSize=2')).body
+-    assert.deepEqual(p1.items.map((n) => n.text), ['a1', 'a2'])
+-    assert.deepEqual(p3.items.map((n) => n.text), ['a5'])
++    assert.deepEqual(p1.notes.map((n) => n.text), ['a1', 'a2'])
++    assert.deepEqual(p3.notes.map((n) => n.text), ['a5'])
+     assert.equal(p1.total, 5)
+   } finally { await app.close() }
+ })

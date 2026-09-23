@@ -1,0 +1,53 @@
+From: bench <bench@example.com>
+Subject: [PATCH] feat: DELETE /notes/:id
+
+---
+ src/client.mjs      | 1 +
+ src/server.mjs      | 4 ++++
+ test/notes.test.mjs | 9 +++++++++
+ 3 files changed, 14 insertions(+)
+
+diff --git a/src/client.mjs b/src/client.mjs
+index 7ac553f..eb1f146 100644
+--- a/src/client.mjs
++++ b/src/client.mjs
+@@ -14,6 +14,7 @@ export function createClient(baseUrl, token) {
+   return {
+     add: (text) => call('POST', '/notes', { text }),
+     get: (id) => call('GET', `/notes/${encodeURIComponent(id)}`),
++    remove: (id) => call('DELETE', `/notes/${encodeURIComponent(id)}`),
+     // Returns every note by walking the pages.
+     async all() {
+       const out = []
+diff --git a/src/server.mjs b/src/server.mjs
+index e090f3c..48311c9 100644
+--- a/src/server.mjs
++++ b/src/server.mjs
+@@ -49,6 +49,10 @@ export function createApp(store = createStore()) {
+         if (!note || note.owner !== user) return send(res, 404, { error: 'not found' })
+         return send(res, 200, note)
+       }
++      if (req.method === 'DELETE' && idMatch) {
++        if (!store.remove(idMatch[1])) return send(res, 404, { error: 'not found' })
++        return send(res, 200, { deleted: idMatch[1] })
++      }
+       return send(res, 404, { error: 'not found' })
+     } catch (err) {
+       if (err instanceof StoreError) return send(res, err.status, { error: err.message })
+diff --git a/test/notes.test.mjs b/test/notes.test.mjs
+index 0d5b488..0dcfe3e 100644
+--- a/test/notes.test.mjs
++++ b/test/notes.test.mjs
+@@ -54,3 +54,12 @@ test('list pages through only the caller\'s notes', async () => {
+     assert.equal(p1.total, 5)
+   } finally { await app.close() }
+ })
++
++test('a user can delete their note', async () => {
++  const app = await startApp()
++  try {
++    const note = await app.alice.add('temp')
++    assert.deepEqual(await app.alice.remove(note.id), { deleted: note.id })
++    assert.equal((await raw(app.base, 'GET', `/notes/${note.id}`)).status, 404)
++  } finally { await app.close() }
++})

@@ -1,0 +1,49 @@
+{
+  "lens": "all",
+  "score": 2,
+  "summary": "The refactor drops the 500-character text limit, so POST /notes now accepts text of any length. The test that caught this was weakened to pass. Opened src/store.mjs, test/notes.test.mjs, src/server.mjs (only caller of store.create), src/client.mjs, test/helpers.mjs, AGENTS.md and main:src/store.mjs. Ran npm test: 6/6 pass, because the too-long assertion is gone.",
+  "coverage": {
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/store.mjs:4",
+      "code": "function validateText(text) {\n  if (typeof text !== 'string' || !text.trim()) throw new StoreError(400, 'text is required')\n}",
+      "issue": "Behavior regression in a commit labeled as a refactor. The max-length check `if (text.length > MAX_TEXT) throw new StoreError(400, ...)` was deleted from create() and not moved into validateText(). POST /notes now returns 201 for text of any length, where it used to return a 400 JSON error. The only memory limit left is the in-memory store itself, and readJson has no body cap, so a client can store notes of any size.",
+      "fix": "Add the length check back inside validateText(): `if (text.length > MAX_TEXT) throw new StoreError(400, `text is longer than ${MAX_TEXT} characters`)` after the required check."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:33",
+      "code": "    assert.equal((await raw(app.base, 'POST', '/notes', { body: JSON.stringify({ text: '   ' }) })).status, 400)",
+      "issue": "This breaks the house rule 'never weaken a test to make it pass'. The too-long assertion (`text: 'x'.repeat(501)` -> 400) was removed and swapped for a whitespace-only assertion, and the test was renamed from 'empty and too-long notes are rejected' to 'empty notes are rejected'. That hides the regression above. The whitespace case is a fine addition, but it cannot replace the length case.",
+      "fix": "Put back `assert.equal((await raw(app.base, 'POST', '/notes', { body: JSON.stringify({ text: 'x'.repeat(501) }) })).status, 400)` and the original test name. Keep the whitespace assertion as an extra check. You can also add a boundary check that 'x'.repeat(500) returns 201."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:2",
+      "code": "const MAX_TEXT = 500",
+      "issue": "Dead code: MAX_TEXT is no longer read anywhere after the length check was dropped (grep confirms store.mjs:2 is its only occurrence). It suggests a limit is enforced when none is.",
+      "fix": "Use it again in validateText() when you restore the length check (see the first finding)."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:45",
+      "code": "        return send(res, 201, store.create(user, body.text))",
+      "issue": "A JSON body of `null` makes readJson resolve null, so `body.text` throws a TypeError. That returns a 500 'internal error' where the house rule expects a 4xx. The server does not crash, because the outer catch handles it."
+    },
+    {
+      "file": "src/server.mjs:16",
+      "code": "    req.on('data', (chunk) => { raw += chunk })",
+      "issue": "No cap on request body size. The whole body is buffered into memory before parsing, so there is a memory-exhaustion risk even with a text length check in place."
+    },
+    {
+      "file": "src/store.mjs:30",
+      "code": "  function remove(id) {\n    return notes.delete(id)\n  }",
+      "issue": "remove() does not check the note's owner. No route exposes it today, but wiring it to DELETE /notes/:id as-is would let one user delete another user's notes (IDOR)."
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+From: bench <bench@example.com>
+Subject: [PATCH] feat: since=<id> filter on the notes list
+
+---
+ src/server.mjs      |  3 ++-
+ src/store.mjs       |  7 ++++---
+ test/notes.test.mjs | 11 +++++++++++
+ 3 files changed, 17 insertions(+), 4 deletions(-)
+
+diff --git a/src/server.mjs b/src/server.mjs
+index e090f3c..0e1348c 100644
+--- a/src/server.mjs
++++ b/src/server.mjs
+@@ -38,7 +38,8 @@ export function createApp(store = createStore()) {
+       if (req.method === 'GET' && url.pathname === '/notes') {
+         const page = positiveInt(url.searchParams.get('page'), 1)
+         const pageSize = positiveInt(url.searchParams.get('pageSize'), 20)
+-        return send(res, 200, store.list(user, { page, pageSize }))
++        const since = url.searchParams.has('since') ? positiveInt(url.searchParams.get('since'), 0) : undefined
++        return send(res, 200, store.list(user, { page, pageSize, since }))
+       }
+       if (req.method === 'POST' && url.pathname === '/notes') {
+         const body = await readJson(req)
+diff --git a/src/store.mjs b/src/store.mjs
+index a2e8d38..24b4ca4 100644
+--- a/src/store.mjs
++++ b/src/store.mjs
+@@ -13,9 +13,10 @@ export function createStore() {
+     return note
+   }
+ 
+-  // page is 1-based.
+-  function list(owner, { page = 1, pageSize = 20 } = {}) {
+-    const mine = [...notes.values()].filter((n) => n.owner === owner)
++  // page is 1-based. since: only notes created after the note with that id.
++  function list(owner, { page = 1, pageSize = 20, since } = {}) {
++    let mine = [...notes.values()].filter((n) => n.owner === owner)
++    if (since !== undefined) mine = mine.filter((n) => Number(n.id) >= since)
+     const start = (page - 1) * pageSize
+     return { items: mine.slice(start, start + pageSize), total: mine.length, page, pageSize }
+   }
+diff --git a/test/notes.test.mjs b/test/notes.test.mjs
+index 0d5b488..6594dd0 100644
+--- a/test/notes.test.mjs
++++ b/test/notes.test.mjs
+@@ -54,3 +54,14 @@ test('list pages through only the caller\'s notes', async () => {
+     assert.equal(p1.total, 5)
+   } finally { await app.close() }
+ })
++
++test('since returns only the newer notes', async () => {
++  const app = await startApp()
++  try {
++    await app.alice.add('old')
++    await app.bob.add('not mine')
++    await app.alice.add('new')
++    const r = await raw(app.base, 'GET', '/notes?since=2')
++    assert.deepEqual(r.body.items.map((n) => n.text), ['new'])
++  } finally { await app.close() }
++})

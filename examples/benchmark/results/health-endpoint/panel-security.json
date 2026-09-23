@@ -1,0 +1,54 @@
+{
+  "lens": "security",
+  "score": 3,
+  "summary": "The /health bypass is scoped correctly: only an exact GET /health skips auth, it returns a fixed body, and /notes still returns 401 (the new test checks this). But moving `new URL` ahead of the auth check means an unauthenticated malformed request now gets a 500 with a logged stack trace instead of a 401. I confirmed this by running the same probe on main and on change. Read src/server.mjs, test/notes.test.mjs, test/helpers.mjs, src/client.mjs and AGENTS.md in full, grepped for createApp/send/health callers (only test/helpers.mjs imports createApp; client.mjs has no health call, so no contract drift), and npm test passes 7/7.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:32",
+      "code": "      const url = new URL(req.url, 'http://localhost')",
+      "issue": "Moving URL parsing above the auth check changes what unauthenticated callers can reach. Node's http parser accepts a raw request target like `GET // HTTP/1.1`, and `new URL('//', 'http://localhost')` throws ERR_INVALID_URL. The throw lands in the generic catch, which returns 500 {\"error\":\"internal error\"} and runs console.error with a full stack. On main the same unauthenticated request got 401 {\"error\":\"unauthorized\"}. So this diff lets anyone without a token trigger 500s and fill the logs, and it breaks the house rule that a bad request returns a 4xx JSON error.",
+      "fix": "Guard the parse and return a 4xx. For example: `let url; try { url = new URL(req.url, 'http://localhost') } catch { return send(res, 400, { error: 'bad request' }) }`. Or keep the old order and check only `req.method === 'GET' && req.url.split('?')[0] === '/health'` before auth, then parse the URL after auth as before. Add a test that sends a raw `GET //` with no token and expects a 4xx (fetch will not send that request target, so it needs node:net or http.request with a raw path)."
+    },
+    {
+      "severity": "minor",
+      "file": "src/server.mjs:34",
+      "code": "      if (req.method === 'GET' && url.pathname === '/health') return send(res, 200, { ok: true })",
+      "issue": "The bypass matches GET only. `HEAD /health` (which many uptime checkers use) and `/health/` both get 401, so a HEAD-based monitor will report the service as down. This does not weaken security.",
+      "fix": "If HEAD-based monitors are expected, accept `req.method === 'GET' || req.method === 'HEAD'` and add a test. Otherwise document that /health is GET-only."
+    },
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:58",
+      "code": "test('health answers without a token', async () => {",
+      "issue": "The test covers only the happy path with no token. It does not check that other methods on /health (for example POST) still go through auth, or that the bypass stays limited to the exact path, so a later loosening such as startsWith('/health') would still pass.",
+      "fix": "Add assertions that `POST /health` with no token returns 401 and that `GET /health/../notes` or `GET /healthz` with no token does not return notes data."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:56",
+      "code": "    } catch (err) {\n      if (err instanceof StoreError) return send(res, err.status, { error: err.message })\n      console.error(err)\n      return send(res, 500, { error: 'internal error' })",
+      "issue": "Even on main, an authenticated request with a malformed target (`GET //`) gets 500 instead of 4xx, because URL parse errors are not StoreError."
+    },
+    {
+      "file": "src/server.mjs:36",
+      "code": "      const user = TOKENS[(req.headers.authorization ?? '').replace(/^Bearer /, '')]",
+      "issue": "The Bearer prefix is optional. `Authorization: token-alice` with no scheme also authenticates, which is looser than the house rule's `Authorization: Bearer <token>`."
+    },
+    {
+      "file": "src/server.mjs:16",
+      "code": "    req.on('data', (chunk) => { raw += chunk })",
+      "issue": "The request body is buffered with no size cap, so any authenticated user can send a very large POST body to exhaust memory."
+    },
+    {
+      "file": "src/server.mjs:6",
+      "code": "const TOKENS = { 'token-alice': 'alice', 'token-bob': 'bob' }",
+      "issue": "Auth tokens are hardcoded in source instead of coming from config or a store."
+    }
+  ]
+}

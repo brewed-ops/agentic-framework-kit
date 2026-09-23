@@ -1,0 +1,47 @@
+{
+  "lens": "correctness",
+  "score": 1,
+  "summary": "The PATCH handler parses the body and calls store.update inside a req 'end' callback, which the handler's try/catch does not cover. Invalid JSON or empty text throws an uncaught exception and crashes the server. I confirmed this at runtime: SyntaxError and StoreError both surfaced as uncaughtException. Opened src/server.mjs, src/store.mjs, src/client.mjs, test/helpers.mjs, test/notes.test.mjs and AGENTS.md. Grepped for update/PATCH (only server.mjs, store.mjs and the new test use them). npm test passes 7/7. Bob's PATCH on Alice's note correctly returns 404.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:55-61",
+      "code": "        let raw = ''\n        req.on('data', (chunk) => { raw += chunk })\n        req.on('end', () => {\n          const body = JSON.parse(raw)\n          send(res, 200, store.update(note.id, body.text))\n        })\n        return",
+      "issue": "The code runs in an event callback after handle() has returned, so the surrounding try/catch never sees its errors. JSON.parse on a malformed or empty body throws SyntaxError. store.update throws StoreError(400) for empty, non-string or too-long text. A JSON body of `null` makes body.text throw a TypeError. Each of these is an uncaughtException that crashes the process (reproduced for '{nope' and {text:''}), and the client never gets a response. There is no req 'error' listener either. This breaks the house rule that a bad request returns a 4xx JSON error and never crashes the server.",
+      "fix": "Use the existing helper the way POST does: `const body = await readJson(req); return send(res, 200, store.update(note.id, body?.text))`. readJson turns bad JSON into StoreError(400) and handles req errors. Because it is awaited, StoreErrors from store.update reach the catch block and come back as 400."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:58-66",
+      "code": "test('a user can edit their note', async () => {",
+      "issue": "Only the happy path is tested. Nothing covers the failure paths this change adds: PATCH with invalid JSON, empty text or too-long text should return 400 and the server should keep serving. Nothing checks that another user's PATCH returns 404 and leaves the text unchanged. A missing-token PATCH returning 401 is also untested. A test for any of the first three would have caught the crash above. House rule: every behavior change comes with a test.",
+      "fix": "Add tests modelled on the existing POST ones. PATCH with '{nope', {text:''} and {text:'x'.repeat(501)} each return 400, and a follow-up GET /notes still returns 200. Bob PATCHing Alice's note gets 404 and Alice's text is unchanged. PATCH without a token gets 401."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:27-33",
+      "code": "  function update(id, text) {\n    const note = notes.get(id)\n    if (typeof text !== 'string' || !text.trim()) throw new StoreError(400, 'text is required')\n    if (text.length > MAX_TEXT) throw new StoreError(400, `text is longer than ${MAX_TEXT} characters`)\n    note.text = text",
+      "issue": "update assumes the id exists. `notes.get(id)` can be undefined, and then `note.text = text` throws a TypeError that becomes a 500. The only current caller checks existence first, but the store is exported and nothing in update itself enforces that. The same validation block is also copied from create.",
+      "fix": "Add `if (!note) throw new StoreError(404, 'not found')` after the lookup. Optionally move the text validation into a shared validateText(text) helper that create and update both call."
+    },
+    {
+      "severity": "minor",
+      "file": "src/server.mjs:52",
+      "code": "      if (req.method === 'PATCH' && idMatch) {",
+      "issue": "src/client.mjs says to keep it in step with server.mjs, but it has no update/edit method, so the new endpoint is only reachable through raw fetch. The test also has to use raw() instead of the client.",
+      "fix": "Add `update: (id, text) => call('PATCH', `/notes/${encodeURIComponent(id)}`, { text })` to createClient. Use app.alice.update in the test."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:45",
+      "code": "        return send(res, 201, store.create(user, body.text))",
+      "issue": "If the POST body is JSON `null`, readJson resolves null and body.text throws a TypeError, which returns a 500 instead of a 400."
+    }
+  ]
+}

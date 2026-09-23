@@ -1,0 +1,47 @@
+{
+  "lens": "all",
+  "score": 2,
+  "summary": "The since filter is off by one. It uses >= where the contract says 'created after', so the cursor note comes back in every result. The only test uses since=2, which is bob's note id, so it cannot catch this. I read server.mjs, store.mjs, notes.test.mjs, helpers.mjs, client.mjs and AGENTS.md in full, and grepped for since and .list( callers (only server.mjs calls store.list; client.mjs never sends since). npm test passes 7/7. A direct probe of list('a',{since:1}) returned ['old','new'].",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/store.mjs:19",
+      "code": "    if (since !== undefined) mine = mine.filter((n) => Number(n.id) >= since)",
+      "issue": "This is off by one. The comment and the feature both say 'only notes created after the note with that id', but >= keeps that note too. The normal way to use since is to pass the id of the caller's own last-seen note, so every poll returns that note again and clients see duplicates. I confirmed it: alice's note 1 is 'old', bob's note 2 is 'x', alice's note 3 is 'new', and list('a',{since:1}) returns ['old','new'] instead of ['new']. This is a behavior contract bug on /notes.",
+      "fix": "Use a strict comparison: `mine = mine.filter((n) => Number(n.id) > since)`."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:64",
+      "code": "    const r = await raw(app.base, 'GET', '/notes?since=2')",
+      "issue": "The test cannot catch the off-by-one. since=2 is bob's note id, and the owner filter already removes bob's notes, so >= and > give the same result. The test never uses one of the caller's own ids as the cursor, which is the boundary that matters. This breaks the house rule that every behavior change needs a real test.",
+      "fix": "Use alice's own note as the cursor: `const old = await app.alice.add('old'); ...; raw(app.base, 'GET', `/notes?since=${old.id}`)` and assert ['new']. Also assert `r.body.total === 1` so total is checked against the filtered set."
+    },
+    {
+      "severity": "major",
+      "file": "src/server.mjs:41",
+      "code": "        const since = url.searchParams.has('since') ? positiveInt(url.searchParams.get('since'), 0) : undefined",
+      "issue": "A bad since value (since=abc, since=-3, since=1.5, since=0 or an empty since=) falls back to 0. The store then treats it as 'every note', so the server returns 200 with the full list. The house rule says a bad request gets a 4xx JSON error. For a sync cursor, silently widening to all notes is worse than failing, because the client cannot tell that its cursor was ignored.",
+      "fix": "Reject invalid values when since is present: `if (url.searchParams.has('since') && positiveInt(url.searchParams.get('since'), null) === null) return send(res, 400, { error: 'since must be a positive integer' })`. Otherwise pass the parsed value. Add a test that since=abc returns 400."
+    },
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:58",
+      "code": "test('since returns only the newer notes', async () => {",
+      "issue": "No test covers since together with page/pageSize, or checks that total reflects the filtered set. Both are part of the response contract that client.mjs relies on (its all() stops when out.length >= total).",
+      "fix": "Add one case such as `/notes?since=<id>&page=1&pageSize=1` that checks items, total and page."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:39",
+      "code": "        const page = positiveInt(url.searchParams.get('page'), 1)",
+      "issue": "An invalid page or pageSize (for example page=abc) silently falls back to the default instead of returning a 4xx. pageSize also has no upper limit, so pageSize=1e9 is accepted. The new since line copied this pattern."
+    }
+  ]
+}

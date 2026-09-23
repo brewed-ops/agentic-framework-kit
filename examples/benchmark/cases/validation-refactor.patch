@@ -1,0 +1,49 @@
+From: bench <bench@example.com>
+Subject: [PATCH] refactor: pull note validation into validateText()
+
+---
+ src/store.mjs       | 7 +++++--
+ test/notes.test.mjs | 4 ++--
+ 2 files changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/src/store.mjs b/src/store.mjs
+index a2e8d38..b31a49d 100644
+--- a/src/store.mjs
++++ b/src/store.mjs
+@@ -1,13 +1,16 @@
+ // In-memory notes store. Notes belong to one owner.
+ const MAX_TEXT = 500
+ 
++function validateText(text) {
++  if (typeof text !== 'string' || !text.trim()) throw new StoreError(400, 'text is required')
++}
++
+ export function createStore() {
+   const notes = new Map()
+   let nextId = 1
+ 
+   function create(owner, text) {
+-    if (typeof text !== 'string' || !text.trim()) throw new StoreError(400, 'text is required')
+-    if (text.length > MAX_TEXT) throw new StoreError(400, `text is longer than ${MAX_TEXT} characters`)
++    validateText(text)
+     const note = { id: String(nextId++), owner, text, createdAt: new Date().toISOString() }
+     notes.set(note.id, note)
+     return note
+diff --git a/test/notes.test.mjs b/test/notes.test.mjs
+index 0d5b488..75bd6b0 100644
+--- a/test/notes.test.mjs
++++ b/test/notes.test.mjs
+@@ -26,11 +26,11 @@ test('requests without a token are rejected', async () => {
+   } finally { await app.close() }
+ })
+ 
+-test('empty and too-long notes are rejected', async () => {
++test('empty notes are rejected', async () => {
+   const app = await startApp()
+   try {
+     assert.equal((await raw(app.base, 'POST', '/notes', { body: JSON.stringify({ text: '' }) })).status, 400)
+-    assert.equal((await raw(app.base, 'POST', '/notes', { body: JSON.stringify({ text: 'x'.repeat(501) }) })).status, 400)
++    assert.equal((await raw(app.base, 'POST', '/notes', { body: JSON.stringify({ text: '   ' }) })).status, 400)
+   } finally { await app.close() }
+ })
+ 

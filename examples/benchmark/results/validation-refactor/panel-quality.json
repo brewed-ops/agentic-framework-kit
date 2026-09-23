@@ -1,0 +1,44 @@
+{
+  "lens": "quality",
+  "score": 2,
+  "summary": "Refactor silently drops the 500-char max-length check, and the test that covered it was replaced instead of kept. Files opened: src/store.mjs, test/notes.test.mjs, src/server.mjs (caller of store.create), AGENTS.md; grepped src/ and test/ for MAX_TEXT, validateText and 501.",
+  "coverage": {
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/store.mjs:4-6",
+      "code": "function validateText(text) {\n  if (typeof text !== 'string' || !text.trim()) throw new StoreError(400, 'text is required')\n}",
+      "issue": "The refactor moved only the empty check into validateText and deleted the `text.length > MAX_TEXT` check. POST /notes (server.mjs:45 -> store.create) now accepts text of any length. Before, a note over 500 chars returned 400; now it returns 201. That is an unannounced behavior change with no test for it (house rule: every behavior change comes with a test). It also removes the only cap on stored text size in an in-memory store.",
+      "fix": "Restore the length check inside validateText: `if (text.length > MAX_TEXT) throw new StoreError(400, `text is longer than ${MAX_TEXT} characters`)`."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:29-34",
+      "code": "test('empty notes are rejected', async () => {\n  const app = await startApp()\n  try {\n    assert.equal((await raw(app.base, 'POST', '/notes', { body: JSON.stringify({ text: '' }) })).status, 400)\n    assert.equal((await raw(app.base, 'POST', '/notes', { body: JSON.stringify({ text: '   ' }) })).status, 400)",
+      "issue": "The test was weakened to make the change pass. The 'x'.repeat(501) -> 400 assertion was removed and the test renamed from 'empty and too-long notes are rejected', so the dropped max-length validation goes undetected. This breaks the house rule 'never weaken a test to make it pass'.",
+      "fix": "Keep the whitespace-only assertion as a new case, and restore the too-long assertion `assert.equal((await raw(app.base, 'POST', '/notes', { body: JSON.stringify({ text: 'x'.repeat(501) }) })).status, 400)` and the original test name. A boundary case at exactly 500 chars returning 201 would also help."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:2",
+      "code": "const MAX_TEXT = 500",
+      "issue": "Dead code: after the change nothing reads MAX_TEXT (grep finds only its declaration). This is a symptom of the dropped check above.",
+      "fix": "Resolved by restoring the length check in validateText, which uses MAX_TEXT again."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/store.mjs:30-32",
+      "code": "function remove(id) {\n    return notes.delete(id)\n  }",
+      "issue": "remove is not scoped to an owner: it deletes any note by id. No route calls it today, but a future DELETE /notes/:id wired straight to it would let a user delete other users' notes unless the caller checks ownership first."
+    },
+    {
+      "file": "src/store.mjs:20-23",
+      "code": "function list(owner, { page = 1, pageSize = 20 } = {}) {\n    const mine = [...notes.values()].filter((n) => n.owner === owner)",
+      "issue": "Every list call copies and filters every note from every user (O(total notes)). The server's pageSize (server.mjs:40) has no upper limit either, so one request can return a user's entire note set."
+    }
+  ]
+}

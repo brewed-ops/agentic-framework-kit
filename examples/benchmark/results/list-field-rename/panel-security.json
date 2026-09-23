@@ -1,0 +1,37 @@
+{
+  "lens": "security",
+  "score": 2,
+  "summary": "The rename from `items` to `notes` breaks the public response contract. `src/client.mjs` all() now throws on every call, and no test covers all(). I opened src/store.mjs, src/server.mjs, src/client.mjs, test/notes.test.mjs, test/helpers.mjs and AGENTS.md. The 6 tests pass. I reproduced the all() failure: 'items is not iterable'.",
+  "coverage": {
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/store.mjs:20",
+      "code": "    return { notes: mine.slice(start, start + pageSize), total: mine.length, page, pageSize }",
+      "issue": "This change renames the list field in the GET /notes response body from `items` to `notes`. AGENTS.md says response shapes are a contract that src/client.mjs and outside callers depend on. src/client.mjs:21-23 still does `const { items, total } = await call(...)` and then `out.push(...items)`, so createClient().all() now throws TypeError 'items is not iterable' on every call. I reproduced this against the running server. Any outside caller reading `.items` also breaks silently, because it gets undefined.",
+      "fix": "Keep `items` as the field name. If the rename is really wanted, return both fields for a deprecation window (`{ items: page, notes: page, total, page, pageSize }`), update src/client.mjs all() to read the new field in the same change, and give outside callers a versioned or announced migration."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:52",
+      "code": "    assert.deepEqual(p1.notes.map((n) => n.text), ['a1', 'a2'])\n    assert.deepEqual(p3.notes.map((n) => n.text), ['a5'])",
+      "issue": "The change edits the existing contract test so it expects the new field name. That makes the test pass instead of catching the break, which the house rule forbids ('never weaken a test to make it pass'). No test exercises client.all(), so the broken caller goes undetected and the suite stays green (6/6).",
+      "fix": "Leave the assertions on `.items`, or assert both field names if an alias is added. Add a test that calls `app.alice.all()` across more than one page, for example 60 notes, and asserts it returns all of alice's notes and none of bob's. That catches the client/server shape drift."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:40",
+      "code": "        const pageSize = positiveInt(url.searchParams.get('pageSize'), 20)",
+      "issue": "pageSize has no upper bound, so a caller can request the whole store in one response (e.g. pageSize=1e9). There is no cap, which leaves room for resource abuse or DoS."
+    },
+    {
+      "file": "src/store.mjs:27",
+      "code": "  function remove(id) {\n    return notes.delete(id)\n  }",
+      "issue": "remove(id) takes no owner, so it does not check who owns the note. No route calls it today. If a DELETE route is wired to it as-is, it becomes an IDOR where any user can delete another user's note. The ownership check has to live in the caller, the way GET /notes/:id does it."
+    }
+  ]
+}

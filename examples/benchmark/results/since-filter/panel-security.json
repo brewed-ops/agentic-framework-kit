@@ -1,0 +1,52 @@
+{
+  "lens": "security",
+  "score": 3,
+  "summary": "The since filter has an off-by-one error: since=N also returns note N, which breaks the documented 'after' contract, and the new test cannot catch it. Opened src/server.mjs, src/store.mjs, test/notes.test.mjs, src/client.mjs, test/helpers.mjs and AGENTS.md, and grepped src and test for since and list( callers. Ran the store directly: list('alice',{since:1}) returned ids [1,2]. npm test: 7/7 pass. Authz is intact because the owner filter runs before since, and the response shape is unchanged, so client.mjs all() still works.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/store.mjs:19",
+      "code": "    if (since !== undefined) mine = mine.filter((n) => Number(n.id) >= since)",
+      "issue": "This breaks the API contract. The comment on line 16 says since returns 'only notes created after the note with that id', but >= includes that note too. Verified: list('alice',{since:1}) returns ids [\"1\",\"2\"]. A caller that polls with its last-seen id gets that note again on every poll, so it sees duplicates and the poll never goes empty. AGENTS.md says response shapes are a contract.",
+      "fix": "Use a strict comparison: mine.filter((n) => Number(n.id) > since)."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:61-65",
+      "code": "    await app.alice.add('old')\n    await app.bob.add('not mine')\n    await app.alice.add('new')\n    const r = await raw(app.base, 'GET', '/notes?since=2')\n    assert.deepEqual(r.body.items.map((n) => n.text), ['new'])",
+      "issue": "The test cannot tell >= from > because id 2 belongs to bob, so the boundary note is filtered out by owner either way. That is why the off-by-one passes. AGENTS.md requires every behavior change to ship with a test that actually covers it. The test also never checks total, never combines since with page/pageSize, and never sends a bad since value.",
+      "fix": "Add a case where the since id is the caller's own note, e.g. alice adds a1, a2, a3 and GET /notes?since=2 must return ['a3'] with total 1. Add since=abc and since=-1 cases that pin whichever behavior is chosen (400 or ignored). Add a since + pageSize=1 case to check that total counts only the filtered notes."
+    },
+    {
+      "severity": "major",
+      "file": "src/server.mjs:41",
+      "code": "        const since = url.searchParams.has('since') ? positiveInt(url.searchParams.get('since'), 0) : undefined",
+      "issue": "A bad since value (since=abc, since=-5, since=1.5, since=Infinity, since=) quietly becomes 0 and returns every note. AGENTS.md says a bad request returns a 4xx JSON error. A caller that sends a malformed cursor gets back the full list as if it were the delta, and nothing tells it the value was rejected. page and pageSize fall back the same way, but a cursor that turns into 'everything' does more damage than a fallback page number.",
+      "fix": "Validate since separately: if the parameter is present but not a non-negative integer, return send(res, 400, { error: 'since must be a non-negative integer' }). Only fall back to undefined when the parameter is absent."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:16",
+      "code": "  // page is 1-based. since: only notes created after the note with that id.",
+      "issue": "The filter compares numeric ids, which only works while ids are sequential integers. The server now exposes since as an ordering cursor, and nothing in src/client.mjs or the docs describes it for outside callers.",
+      "fix": "Once the operator is fixed, document since in the client (e.g. a since(id) helper or an option on all()), or state in the comment that ids are monotonic integers and that since is exclusive."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:39-40",
+      "code": "        const page = positiveInt(url.searchParams.get('page'), 1)\n        const pageSize = positiveInt(url.searchParams.get('pageSize'), 20)",
+      "issue": "pageSize has no upper limit, so pageSize=1e9 is accepted and one request can pull the caller's whole store. Invalid page and pageSize values are silently replaced instead of getting a 4xx."
+    },
+    {
+      "file": "src/store.mjs:28-30",
+      "code": "  function remove(id) {\n    return notes.delete(id)\n  }",
+      "issue": "remove takes no owner. No route exposes it today, but any future DELETE route that calls it directly would let one user delete another user's notes, unlike the GET /notes/:id route, which checks the owner."
+    }
+  ]
+}

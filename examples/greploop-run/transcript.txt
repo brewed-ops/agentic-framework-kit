@@ -1,0 +1,273 @@
+$ greploop run test --cmd npm test --scope node --test test/*.test.mjs
+
+> demo-notes-api@1.0.0 test
+> node --test test/*.test.mjs
+
+✔ a user can add and read back their note (29.9789ms)
+✔ another user cannot read the note (11.6949ms)
+✔ requests without a token are rejected (5.243ms)
+✔ empty and too-long notes are rejected (9.3029ms)
+✔ invalid JSON is a 400, not a crash (7.891ms)
+✔ list pages through only the caller's notes (16.7586ms)
+✔ since returns only the newer notes (7.3628ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 193.1048
+check test: exit 0 in 0.6s (ran by the runner)
+[exit 0]
+
+$ greploop run lint --cmd npm run lint
+
+> demo-notes-api@1.0.0 lint
+> node --check src/store.mjs && node --check src/server.mjs && node --check src/client.mjs
+
+check lint: exit 0 in 0.6s (ran by the runner)
+[exit 0]
+
+$ greploop add --bundle all --iter 1 --file examples/benchmark/results/since-filter/single.json
+accepted all on bundle all (iteration 1): score 2, 4 finding(s) - 0 re-anchored, 0 unanchored, 0 moved to pre_existing
+[exit 0]
+
+$ greploop merge 1
+iteration 1 merged: 4 finding(s) after dedupe, run score 2 (min across bundles; reviewer confidence, not proof)
+  bundle all: all 2 -> 2; 2 blocking, 1 major, 1 minor
+  F1 [blocking] src/store.mjs:19 - This is off by one. The comment and the feature both say 'only notes created after the note with that id', but >= keeps that note too. The normal way to use since is to pass the id of the caller's own last-seen note, so every poll returns that note again and clients see duplicates. I confirmed it: alice's note 1 is 'old', bob's note 2 is 'x', alice's note 3 is 'new', and list('a',{since:1}) returns ['old','new'] instead of ['new']. This is a behavior contract bug on /notes.
+  F2 [blocking] test/notes.test.mjs:64 - The test cannot catch the off-by-one. since=2 is bob's note id, and the owner filter already removes bob's notes, so >= and > give the same result. The test never uses one of the caller's own ids as the cursor, which is the boundary that matters. This breaks the house rule that every behavior change needs a real test.
+  F3 [major] src/server.mjs:41 - A bad since value (since=abc, since=-3, since=1.5, since=0 or an empty since=) falls back to 0. The store then treats it as 'every note', so the server returns 200 with the full list. The house rule says a bad request gets a 4xx JSON error. For a sync cursor, silently widening to all notes is worse than failing, because the client cannot tell that its cursor was ignored.
+  F4 [minor] test/notes.test.mjs:58 - No test covers since together with page/pageSize, or checks that total reflects the filtered set. Both are part of the response contract that client.mjs relies on (its all() stops when out.length >= total).
+[exit 0]
+
+$ greploop status
+quick: iteration 1/1 merged, dispatches 1/2, 0 min elapsed (estimate a few minutes)
+bundle all: not clean - a reviewer scored 3 or lower; the reviewer scored 2 (quick needs 5); iteration 1 found 2 blocking + 1 major; open ledger rows: F1, F2, F3
+open F1 [blocking] src/store.mjs:19 - This is off by one. The comment and the feature both say 'only notes created after the note with that id', but >= keeps that note too. The normal way to use since is to pass the id of the caller's own last-seen note, so every poll returns that note again and clients see duplicates. I confirmed it: alice's note 1 is 'old', bob's note 2 is 'x', alice's note 3 is 'new', and list('a',{since:1}) returns ['old','new'] instead of ['new']. This is a behavior contract bug on /notes.
+open F2 [blocking] test/notes.test.mjs:64 - The test cannot catch the off-by-one. since=2 is bob's note id, and the owner filter already removes bob's notes, so >= and > give the same result. The test never uses one of the caller's own ids as the cursor, which is the boundary that matters. This breaks the house rule that every behavior change needs a real test.
+open F3 [major] src/server.mjs:41 - A bad since value (since=abc, since=-3, since=1.5, since=0 or an empty since=) falls back to 0. The store then treats it as 'every note', so the server returns 200 with the full list. The house rule says a bad request gets a 4xx JSON error. For a sync cursor, silently widening to all notes is worse than failing, because the client cannot tell that its cursor was ignored.
+open F4 [minor] test/notes.test.mjs:58 - No test covers since together with page/pageSize, or checks that total reflects the filtered set. Both are part of the response contract that client.mjs relies on (its all() stops when out.length >= total).
+release: unmet - review exit condition; open blocking/major findings; scanloop not run (details: report)
+budget exhausted - escalate: review.mjs escalate
+[exit 2]
+
+$ node scanloop/scripts/scan.mjs --base main
+scanloop CLEAN - base main (adef3dc6) .. HEAD (6ca16a76), 3 changed file(s)
+  gitleaks     ran             required  8.30.1
+  semgrep      ran             required  1.165.0
+  osv-scanner  not-applicable            osv-scanner version: 2.3.8  (no manifest or lockfile changed)
+  findings: 0 blocking, 0 major, 0 minor; 0 suppressed by allowlist
+  note: semgrep used registry packs, which change over time - results are not pinned; vendor the rules and set semgrepConfigs to pin them
+  clean - all required scanners ran, no blocking or major findings
+  report: .scanloop/report.json
+[exit 0]
+
+$ greploop scan .scanloop/report.json
+scan imported: verdict CLEAN, tools gitleaks=ran, semgrep=ran, osv-scanner=not-applicable; ledger +0 new, 0 reopened, 0 cleared by the rescan
+[exit 0]
+
+$ greploop escalate --profile standard
+escalated to standard: next iteration 2 reviews every bundle; budget 3 iteration(s), 12 dispatches
+[exit 0]
+
+$ greploop add --bundle all --file examples/benchmark/results/since-filter/panel-correctness.json
+accepted correctness on bundle all (iteration 2): score 3, 3 finding(s) - 0 re-anchored, 0 unanchored, 0 moved to pre_existing
+[exit 0]
+
+$ greploop add --bundle all --file examples/benchmark/results/since-filter/panel-security.json
+accepted security on bundle all (iteration 2): score 3, 4 finding(s) - 0 re-anchored, 0 unanchored, 0 moved to pre_existing
+[exit 0]
+
+$ greploop add --bundle all --file examples/benchmark/results/since-filter/panel-quality.json
+accepted quality on bundle all (iteration 2): score 3, 4 finding(s) - 0 re-anchored, 0 unanchored, 0 moved to pre_existing
+[exit 0]
+
+$ greploop merge 2
+iteration 2 merged: 5 finding(s) after dedupe, run score 3 (min across bundles; reviewer confidence, not proof)
+  bundle all: correctness 3, security 3, quality 3 -> 3; 2 blocking, 1 major, 2 minor
+  F1 [blocking][consensus] src/store.mjs:19 - This is off by one. The comment and the feature both say 'only notes created after the note with that id', but >= keeps that note too. The normal way to use since is to pass the id of the caller's own last-seen note, so every poll returns that note again and clients see duplicates. I confirmed it: alice's note 1 is 'old', bob's note 2 is 'x', alice's note 3 is 'new', and list('a',{since:1}) returns ['old','new'] instead of ['new']. This is a behavior contract bug on /notes.
+  F2 [blocking][consensus] test/notes.test.mjs:64 - The test cannot catch the off-by-one. since=2 is bob's note id, and the owner filter already removes bob's notes, so >= and > give the same result. The test never uses one of the caller's own ids as the cursor, which is the boundary that matters. This breaks the house rule that every behavior change needs a real test.
+  F3 [major][consensus] src/server.mjs:41 - A bad since value (since=abc, since=-3, since=1.5, since=0 or an empty since=) falls back to 0. The store then treats it as 'every note', so the server returns 200 with the full list. The house rule says a bad request gets a 4xx JSON error. For a sync cursor, silently widening to all notes is worse than failing, because the client cannot tell that its cursor was ignored.
+  F5 [minor] src/store.mjs:16 - The filter compares numeric ids, which only works while ids are sequential integers. The server now exposes since as an ordering cursor, and nothing in src/client.mjs or the docs describes it for outside callers.
+  F4 [minor] test/notes.test.mjs:58 - No test covers since together with page/pageSize, or checks that total reflects the filtered set. Both are part of the response contract that client.mjs relies on (its all() stops when out.length >= total).
+[exit 0]
+
+$ greploop status
+standard: iteration 1/3 merged, dispatches 3/12, 1 min elapsed (estimate roughly 10-40 minutes)
+bundle all: not clean - a reviewer scored 3 or lower; fewer than 2 of 3 reviewers scored 5; iteration 2 found 2 blocking + 1 major; open ledger rows: F1, F2, F3
+open F1 [blocking][consensus] src/store.mjs:19 - This is off by one. The comment and the feature both say 'only notes created after the note with that id', but >= keeps that note too. The normal way to use since is to pass the id of the caller's own last-seen note, so every poll returns that note again and clients see duplicates. I confirmed it: alice's note 1 is 'old', bob's note 2 is 'x', alice's note 3 is 'new', and list('a',{since:1}) returns ['old','new'] instead of ['new']. This is a behavior contract bug on /notes.
+open F2 [blocking][consensus] test/notes.test.mjs:64 - The test cannot catch the off-by-one. since=2 is bob's note id, and the owner filter already removes bob's notes, so >= and > give the same result. The test never uses one of the caller's own ids as the cursor, which is the boundary that matters. This breaks the house rule that every behavior change needs a real test.
+open F3 [major][consensus] src/server.mjs:41 - A bad since value (since=abc, since=-3, since=1.5, since=0 or an empty since=) falls back to 0. The store then treats it as 'every note', so the server returns 200 with the full list. The house rule says a bad request gets a 4xx JSON error. For a sync cursor, silently widening to all notes is worse than failing, because the client cannot tell that its cursor was ignored.
+open F4 [minor] test/notes.test.mjs:58 - No test covers since together with page/pageSize, or checks that total reflects the filtered set. Both are part of the response contract that client.mjs relies on (its all() stops when out.length >= total).
+open F5 [minor] src/store.mjs:16 - The filter compares numeric ids, which only works while ids are sequential integers. The server now exposes since as an ordering cursor, and nothing in src/client.mjs or the docs describes it for outside callers.
+release: unmet - review exit condition; open blocking/major findings (details: report)
+exit condition not met - fix, re-review, merge
+[exit 1]
+
+$ greploop resolve F1 --how since filter uses > so the cursor note is excluded --test node --test test/notes.test.mjs --reverted-exit 1
+✔ a user can add and read back their note (30.5264ms)
+✔ another user cannot read the note (12.3304ms)
+✔ requests without a token are rejected (6.3534ms)
+✔ empty and too-long notes are rejected (8.3101ms)
+✔ invalid JSON is a 400, not a crash (6.394ms)
+✔ list pages through only the caller's notes (13.9925ms)
+✔ since returns only the newer notes (6.8097ms)
+✔ a malformed since is a 400 (5.1437ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 189.2498
+F1 resolved
+[exit 0]
+
+$ greploop resolve F2 --how test uses alice's own note as the boundary and asserts total --test node --test test/notes.test.mjs --reverted-exit 1
+✔ a user can add and read back their note (29.727ms)
+✔ another user cannot read the note (13.1841ms)
+✔ requests without a token are rejected (4.5153ms)
+✔ empty and too-long notes are rejected (9.0553ms)
+✔ invalid JSON is a 400, not a crash (7.6089ms)
+✔ list pages through only the caller's notes (14.1928ms)
+✔ since returns only the newer notes (6.3423ms)
+✔ a malformed since is a 400 (6.4868ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 192.5938
+F2 resolved
+[exit 0]
+
+$ greploop resolve F3 --how since that is not a whole number returns 400; new test covers abc, -1, 1.5 and empty --test node --test test/notes.test.mjs --reverted-exit 1
+✔ a user can add and read back their note (31.2998ms)
+✔ another user cannot read the note (12.8145ms)
+✔ requests without a token are rejected (5.9941ms)
+✔ empty and too-long notes are rejected (9.1025ms)
+✔ invalid JSON is a 400, not a crash (7.1534ms)
+✔ list pages through only the caller's notes (14.6245ms)
+✔ since returns only the newer notes (6.9632ms)
+✔ a malformed since is a 400 (6.4791ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 203.1658
+F3 resolved
+[exit 0]
+
+$ git commit -> f8036af fix: since excludes the cursor note, 400 on a malformed since, boundary test
+$ greploop run test --cmd npm test --scope node --test test/*.test.mjs
+
+> demo-notes-api@1.0.0 test
+> node --test test/*.test.mjs
+
+✔ a user can add and read back their note (31.4437ms)
+✔ another user cannot read the note (11.4813ms)
+✔ requests without a token are rejected (5.8063ms)
+✔ empty and too-long notes are rejected (9.0602ms)
+✔ invalid JSON is a 400, not a crash (8.4103ms)
+✔ list pages through only the caller's notes (15.0595ms)
+✔ since returns only the newer notes (7.701ms)
+✔ a malformed since is a 400 (6.7394ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 194.916
+check test: exit 0 in 0.6s (ran by the runner)
+[exit 0]
+
+$ greploop run lint --cmd npm run lint
+
+> demo-notes-api@1.0.0 lint
+> node --check src/store.mjs && node --check src/server.mjs && node --check src/client.mjs
+
+check lint: exit 0 in 0.6s (ran by the runner)
+[exit 0]
+
+$ node scanloop/scripts/scan.mjs --base main
+scanloop CLEAN - base main (adef3dc6) .. HEAD (f8036af6), 3 changed file(s)
+  gitleaks     ran             required  8.30.1
+  semgrep      ran             required  1.165.0
+  osv-scanner  not-applicable            osv-scanner version: 2.3.8  (no manifest or lockfile changed)
+  findings: 0 blocking, 0 major, 0 minor; 0 suppressed by allowlist
+  note: semgrep used registry packs, which change over time - results are not pinned; vendor the rules and set semgrepConfigs to pin them
+  clean - all required scanners ran, no blocking or major findings
+  report: .scanloop/report.json
+
+$ greploop scan .scanloop/report.json
+scan imported: verdict CLEAN, tools gitleaks=ran, semgrep=ran, osv-scanner=not-applicable; ledger +0 new, 0 reopened, 0 cleared by the rescan
+[exit 0]
+
+$ greploop add --bundle all --file examples/greploop-run/replies/iteration-3-correctness.json
+accepted correctness on bundle all (iteration 3): score 4, 2 finding(s) - 0 re-anchored, 0 unanchored, 0 moved to pre_existing
+[exit 0]
+
+$ greploop add --bundle all --file examples/greploop-run/replies/iteration-3-security.json
+accepted security on bundle all (iteration 3): score 4, 2 finding(s) - 0 re-anchored, 0 unanchored, 0 moved to pre_existing
+[exit 0]
+
+$ greploop add --bundle all --file examples/greploop-run/replies/iteration-3-quality.json
+accepted quality on bundle all (iteration 3): score 4, 2 finding(s) - 0 re-anchored, 0 unanchored, 0 moved to pre_existing
+[exit 0]
+
+$ greploop merge 3
+iteration 3 merged: 2 finding(s) after dedupe, run score 4 (min across bundles; reviewer confidence, not proof)
+  bundle all: correctness 4, security 4, quality 4 -> 4; 0 blocking, 0 major, 2 minor
+  F4 [minor][consensus] test/notes.test.mjs:58 - No test covers since together with page/pageSize, or checks that total reflects the filtered set. Both are part of the response contract that client.mjs relies on (its all() stops when out.length >= total).
+  F5 [minor][consensus] src/store.mjs:16 - The filter compares numeric ids, which only works while ids are sequential integers. The server now exposes since as an ordering cursor, and nothing in src/client.mjs or the docs describes it for outside callers.
+
+$ greploop status
+standard: iteration 2/3 merged, dispatches 6/12, 3 min elapsed (estimate roughly 10-40 minutes)
+bundle all: not clean - fewer than 2 of 3 reviewers scored 5
+open F4 [minor][consensus] test/notes.test.mjs:58 - No test covers since together with page/pageSize, or checks that total reflects the filtered set. Both are part of the response contract that client.mjs relies on (its all() stops when out.length >= total).
+open F5 [minor][consensus] src/store.mjs:16 - The filter compares numeric ids, which only works while ids are sequential integers. The server now exposes since as an ordering cursor, and nothing in src/client.mjs or the docs describes it for outside callers.
+release: unmet - review exit condition (details: report)
+exit condition not met - fix, re-review, merge
+[exit 1]
+
+# runner gate fixed here: every reviewer at 4 or 5 (was: 2 of 3 at 5, which made minor-only findings block)
+$ greploop status
+standard: iteration 2/3 merged, dispatches 6/12, 4 min elapsed (estimate roughly 10-40 minutes)
+bundle all: CLEAN - the panel found no blocking or major issues
+open F4 [minor][consensus] test/notes.test.mjs:58 - No test covers since together with page/pageSize, or checks that total reflects the filtered set. Both are part of the response contract that client.mjs relies on (its all() stops when out.length >= total).
+open F5 [minor][consensus] src/store.mjs:16 - The filter compares numeric ids, which only works while ids are sequential integers. The server now exposes since as an ordering cursor, and nothing in src/client.mjs or the docs describes it for outside callers.
+release: every configured condition met (details: report)
+exit condition met
+[exit 0]
+
+$ node scanloop/scripts/scan.mjs --base main   # rerun after the report-path fix
+scanloop CLEAN - base main (adef3dc6) .. HEAD (f8036af6), 3 changed file(s)
+  gitleaks     ran             required  8.30.1
+  semgrep      ran             required  1.165.0
+  osv-scanner  not-applicable            osv-scanner version: 2.3.8  (no manifest or lockfile changed)
+  findings: 0 blocking, 0 major, 0 minor; 0 suppressed by allowlist
+  note: semgrep used registry packs, which change over time - results are not pinned; vendor the rules and set semgrepConfigs to pin them
+  clean - all required scanners ran, no blocking or major findings
+  report: .scanloop/report.json
+
+$ greploop scan .scanloop/report.json
+scan imported: verdict CLEAN, tools gitleaks=ran, semgrep=ran, osv-scanner=not-applicable; ledger +0 new, 0 reopened, 0 cleared by the rescan
+
+$ greploop status
+standard: iteration 2/3 merged, dispatches 6/12, 4 min elapsed (estimate roughly 10-40 minutes)
+bundle all: CLEAN - the panel found no blocking or major issues
+open F4 [minor][consensus] test/notes.test.mjs:58 - No test covers since together with page/pageSize, or checks that total reflects the filtered set. Both are part of the response contract that client.mjs relies on (its all() stops when out.length >= total).
+open F5 [minor][consensus] src/store.mjs:16 - The filter compares numeric ids, which only works while ids are sequential integers. The server now exposes since as an ordering cursor, and nothing in src/client.mjs or the docs describes it for outside callers.
+release: every configured condition met (details: report)
+exit condition met
+[exit 0]

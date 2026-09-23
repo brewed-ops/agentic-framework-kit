@@ -1,0 +1,44 @@
+{
+  "lens": "quality",
+  "score": 2,
+  "summary": "The rename from items to notes in store.list() changes the GET /notes response contract and breaks src/client.mjs all(). I opened src/store.mjs, test/notes.test.mjs, src/server.mjs, src/client.mjs, test/helpers.mjs and AGENTS.md, and grepped for 'items'. npm test passes 6/6, but calling alice.all() at runtime throws 'items is not iterable'.",
+  "coverage": {
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/store.mjs:20",
+      "code": "    return { notes: mine.slice(start, start + pageSize), total: mine.length, page, pageSize }",
+      "issue": "This breaks the house rule 'Response shapes are a contract: src/client.mjs and outside callers depend on them'. server.mjs:41 sends store.list() unchanged, so GET /notes now returns `notes` instead of `items`. Any outside caller that reads `items` breaks without warning.",
+      "fix": "Keep the `items` key. If the rename is truly needed, version the endpoint or return both keys during a deprecation window, and update src/client.mjs in the same change."
+    },
+    {
+      "severity": "blocking",
+      "file": "src/client.mjs:21",
+      "code": "        const { items, total } = await call('GET', `/notes?page=${page}&pageSize=50`)\n        out.push(...items)\n        if (!items.length || out.length >= total) return out",
+      "issue": "This caller is broken by the diff. `items` is now undefined, so `out.push(...items)` throws a TypeError ('items is not iterable'). I confirmed this at runtime: startApp(), then alice.add('x'), then alice.all() threw. Every consumer of client.all() now fails.",
+      "fix": "Revert the store key to `items`. If the rename stays, change the destructure to `const { notes: items, total }` in client.mjs in this same diff."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:52",
+      "code": "    assert.deepEqual(p1.notes.map((n) => n.text), ['a1', 'a2'])\n    assert.deepEqual(p3.notes.map((n) => n.text), ['a5'])",
+      "issue": "The test was edited to match the new shape, which hides the contract break. This goes against the house rule 'never weaken a test to make it pass'. No test calls client.all(), so the suite stays green while the shipped client is broken.",
+      "fix": "Keep asserting the contract key (`items`). Add a test that calls `app.alice.all()` after adding more notes than one page holds (for example 3 notes with a small page size, or 51+ notes at the default 50) and asserts every note comes back. This covers the client and server together."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/store.mjs:18",
+      "code": "    const mine = [...notes.values()].filter((n) => n.owner === owner)",
+      "issue": "Every list call copies and filters every note from every owner, so each page request costs O(total notes). client.all() calls it once per page, so fetching everything costs O(pages * total notes). This is fine at demo scale but degrades as the store grows. A per-owner index would fix it."
+    },
+    {
+      "file": "src/client.mjs:18",
+      "code": "    async all() {",
+      "issue": "There has never been a test for client.all(), the paging walk. That gap is why a contract break in list() can pass the test suite."
+    }
+  ]
+}

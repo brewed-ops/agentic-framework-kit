@@ -1,0 +1,37 @@
+{
+  "lens": "all",
+  "score": 2,
+  "summary": "The rename from `items` to `notes` in store.list breaks the documented response contract and crashes src/client.mjs all(). The test was edited to the new shape instead of catching the break. Opened src/store.mjs, test/notes.test.mjs, src/client.mjs, src/server.mjs, test/helpers.mjs and AGENTS.md, and grepped for items/.notes/list( across the repo.",
+  "coverage": {
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/store.mjs:20",
+      "code": "    return { notes: mine.slice(start, start + pageSize), total: mine.length, page, pageSize }",
+      "issue": "This renames the GET /notes response field from `items` to `notes`, which breaks a house rule: response shapes are a contract that src/client.mjs and outside callers depend on. src/server.mjs:41 sends store.list() straight through, so every consumer now gets `items === undefined`. In src/client.mjs:21-23, `const { items, total } = await call(...)` followed by `out.push(...items)` throws a TypeError (undefined is not iterable) on the first page. So client.all() now fails for every user, and outside callers reading `.items` break silently.",
+      "fix": "Keep the contract and return `items` as before: `return { items: mine.slice(start, start + pageSize), total: mine.length, page, pageSize }`. If the rename is truly wanted, update src/client.mjs:21-23 in the same change and keep `items` as a deprecated alias for outside callers, e.g. `{ items: pageNotes, notes: pageNotes, ... }`."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:52",
+      "code": "    assert.deepEqual(p1.notes.map((n) => n.text), ['a1', 'a2'])\n    assert.deepEqual(p3.notes.map((n) => n.text), ['a5'])",
+      "issue": "The existing test that pinned the `items` contract was rewritten to match the new shape instead of catching the break. That weakens a test to make it pass, which the house rules forbid. No test covers the broken caller, client.all(), so the suite stays green while the shipped client is broken.",
+      "fix": "Revert the assertions to `p1.items` / `p3.items`. Add a test that calls `app.alice.all()` after adding more than one page of notes (and one bob note), then asserts it returns exactly alice's notes. That test fails on this change, as it should."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/client.mjs:21",
+      "code": "        const { items, total } = await call('GET', `/notes?page=${page}&pageSize=50`)",
+      "issue": "No test in test/ exercises client.all(), the only multi-page client path, so a contract drift in the list response is never caught by the suite."
+    },
+    {
+      "file": "src/server.mjs:40",
+      "code": "        const pageSize = positiveInt(url.searchParams.get('pageSize'), 20)",
+      "issue": "pageSize has no upper bound, so a caller can ask for an arbitrarily large page in one request. That is a minor resource footgun, and this diff did not introduce it."
+    }
+  ]
+}

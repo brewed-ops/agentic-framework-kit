@@ -1,0 +1,33 @@
+{
+  "lens": "security",
+  "score": 4,
+  "summary": "No blocking or major issues. Reviewed the full src/server.mjs, src/store.mjs and test/notes.test.mjs, plus src/client.mjs, test/helpers.mjs, AGENTS.md and package.json. Grepped every since/list( caller: store.list is only called from server.mjs, and client.mjs never sends since. npm test passes 9/9. The owner filter still runs before the since filter, so another user's ids cannot leak anything. The response shape {items,total,page,pageSize} is unchanged, so client.all() is not affected. F1, F2 and F3 are fixed at the root. F4 and F5 are still open as minor.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:58",
+      "code": "test('since returns only the newer notes', async () => {",
+      "issue": "F4 is still open. No test combines since with page/pageSize, so nothing proves that total and the page slice are computed after the since filter. A regression that paged first and filtered second would not be caught, and it would break client-style page walking on filtered lists.",
+      "fix": "Add a test: alice adds 5 notes, then GET /notes?since=<id of note 1>&page=2&pageSize=2. Assert the items are ['a4','a5'] and total is 4."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:16",
+      "code": "  // page is 1-based. since: only notes created after the note with that id.",
+      "issue": "F5 is still open. The since cursor relies on ids being sequential numeric strings (Number(n.id) > since). That is documented only in an internal comment, not for outside callers, whom AGENTS.md names as depending on the contract. The comment also says 'the note with that id', but the check is purely numeric. Any since value works, including a missing id or another user's id. That is safe, but it is not what the comment says. client.mjs has no since support, so it gives callers no guidance either.",
+      "fix": "Document the since contract where callers read it (README or a comment in client.mjs, or add a since option to client.all). Say: since is a note id from an earlier response; the result holds the caller's notes with a numerically greater id; total counts only the filtered notes. Reword the store comment to 'notes whose numeric id is greater than since'."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:32",
+      "code": "      const user = TOKENS[(req.headers.authorization ?? '').replace(/^Bearer /, '')]",
+      "issue": "TOKENS is a plain object literal, so a lookup can hit an inherited Object.prototype key. A header like 'Bearer constructor' resolves to a truthy function, not undefined, and passes the !user check. The diff did not touch this line. The since change does not make it worse: the owner filter compares against a function, so it returns an empty list."
+    }
+  ]
+}

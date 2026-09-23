@@ -1,0 +1,45 @@
+{
+  "lens": "quality",
+  "score": 1,
+  "summary": "The new DELETE /notes/:id never checks who owns the note, so any signed-in user can delete anyone else's note (a data-loss and authorization hole), and no test checks that. Opened src/server.mjs, src/client.mjs, src/store.mjs, test/helpers.mjs, test/notes.test.mjs and AGENTS.md; grepped remove/DELETE; npm test passes 7/7.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/client.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:52-55",
+      "code": "      if (req.method === 'DELETE' && idMatch) {\n        if (!store.remove(idMatch[1])) return send(res, 404, { error: 'not found' })\n        return send(res, 200, { deleted: idMatch[1] })\n      }",
+      "issue": "Breaks the house rule that a user only ever sees or changes their own notes. The handler deletes by id and never compares note.owner with the caller, so bob can DELETE alice's note and gets 200. That is data loss for alice. It also works as an id oracle: 200 or 404 tells bob whether an id exists, while GET correctly returns 404 for another user's note. Because ids are sequential strings ('1', '2', ...), a loop can wipe every user's notes.",
+      "fix": "Do the same ownership check GET does before removing: `const note = store.get(idMatch[1]); if (!note || note.owner !== user) return send(res, 404, { error: 'not found' }); store.remove(note.id); return send(res, 200, { deleted: note.id })`."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:58-65",
+      "code": "test('a user can delete their note', async () => {\n  const app = await startApp()\n  try {\n    const note = await app.alice.add('temp')\n    assert.deepEqual(await app.alice.remove(note.id), { deleted: note.id })\n    assert.equal((await raw(app.base, 'GET', `/notes/${note.id}`)).status, 404)\n  } finally { await app.close() }\n})",
+      "issue": "Only the owner's happy path is tested. Nothing tests the security side of the new behavior: another user deleting the note, which is why the ownership hole above passes CI. Also untested: deleting an id that does not exist (should be 404) and a DELETE with no token (should be 401). The house rule requires the behavior change to come with tests.",
+      "fix": "Add a test in which bob sends `raw(app.base, 'DELETE', `/notes/${note.id}`, { token: 'token-bob' })`, expect status 404, then check that `app.alice.get(note.id)` still returns the note. Add a 404 case for a missing id (e.g. '/notes/999') and a 401 case for DELETE with `{ token: null }`."
+    },
+    {
+      "severity": "minor",
+      "file": "src/server.mjs:54",
+      "code": "        return send(res, 200, { deleted: idMatch[1] })",
+      "issue": "The response echoes the raw, still percent-encoded path segment rather than the stored note's id. Today ids are numeric, so the two always match. That will change if ids ever contain characters that get encoded, which makes this response shape (a client contract) fragile.",
+      "fix": "Echo the id of the note that was actually found: `{ deleted: note.id }` (this falls out of the ownership fix above)."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/store.mjs:18",
+      "code": "    const mine = [...notes.values()].filter((n) => n.owner === owner)",
+      "issue": "Every page request copies and filters the whole store (O(total notes)). client.all() fetches page after page, so walking one user's notes costs O(pages x total notes), roughly quadratic as data grows."
+    },
+    {
+      "file": "src/server.mjs:6",
+      "code": "const TOKENS = { 'token-alice': 'alice', 'token-bob': 'bob' }",
+      "issue": "Auth tokens are hardcoded in source rather than read from config or a store (demo-only, and noted as such in the comment)."
+    }
+  ]
+}

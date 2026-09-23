@@ -1,0 +1,52 @@
+{
+  "lens": "quality",
+  "score": 3,
+  "summary": "Off-by-one in the since filter: it returns the note whose id you pass, but the documented contract says only notes after it. The one new test cannot catch this because it passes bob's id as the boundary. Invalid since values silently return everything. Opened src/server.mjs, src/store.mjs, test/notes.test.mjs, test/helpers.mjs, src/client.mjs and AGENTS.md. Grepped for list/since callers (only server.mjs calls store.list, and client.mjs sends no since). Ran npm test: 7/7 pass. Probed the store directly: list('alice',{since:1}) returns [old,new].",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/store.mjs:19",
+      "code": "    if (since !== undefined) mine = mine.filter((n) => Number(n.id) >= since)",
+      "issue": "Off-by-one against the stated contract on line 16 ('only notes created after the note with that id'). `>=` includes the since note itself. Verified: with alice notes id1 'old' and id2 'new', list('alice',{since:1}) returns ['old','new'] when it should return ['new']. A client polling with since=<last seen id> gets its last note again on every poll. This is a behavior bug in a response contract that outside callers depend on.",
+      "fix": "Use a strict comparison: `mine = mine.filter((n) => Number(n.id) > since)`."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:64",
+      "code": "    const r = await raw(app.base, 'GET', '/notes?since=2')",
+      "issue": "The test cannot tell the correct behavior from the bug. Id 2 is bob's note, so it is filtered out by owner no matter what, and `>=` and `>` give the same result. The boundary case (since = the caller's own note id) is not tested at all. The house rule says every behavior change comes with a test, and this test does not pin the behavior.",
+      "fix": "Add an assertion where since is the caller's own note, e.g. `const old = await app.alice.add('old'); await app.alice.add('new'); const r = await raw(app.base, 'GET', `/notes?since=${old.id}`); assert.deepEqual(r.body.items.map((n) => n.text), ['new'])`, and assert `r.body.total` too."
+    },
+    {
+      "severity": "major",
+      "file": "src/server.mjs:41",
+      "code": "        const since = url.searchParams.has('since') ? positiveInt(url.searchParams.get('since'), 0) : undefined",
+      "issue": "Malformed since values (`since=abc`, `since=-5`, `since=1.5`, `since=`) silently become 0 and return every note. A client with a bug in its cursor gets its whole history back and no error. The house rule says a bad request returns a 4xx JSON error. This matches how page/pageSize already fall back, but it is new input handling added by this diff, and none of these cases are tested.",
+      "fix": "Reject a present but invalid since with a 400: `if (url.searchParams.has('since') && !Number.isInteger(Number(url.searchParams.get('since')))) return send(res, 400, { error: 'since must be a non-negative integer' })`, or throw `new StoreError(400, ...)`. Add a test that `/notes?since=abc` returns 400."
+    },
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:58",
+      "code": "test('since returns only the newer notes', async () => {",
+      "issue": "No test for since combined with page/pageSize, or for `total` reflecting the filtered count. Those are part of the response-shape contract that client.all() relies on (`out.length >= total`).",
+      "fix": "Add a case with several newer notes plus `pageSize=1`, and assert both `items` and `total` equal the filtered count."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:39",
+      "code": "        const page = positiveInt(url.searchParams.get('page'), 1)",
+      "issue": "Invalid page/pageSize values (e.g. `page=abc`, `pageSize=-1`) silently fall back to defaults instead of returning a 4xx. pageSize also has no upper bound, so `pageSize=1000000000` is accepted."
+    },
+    {
+      "file": "src/store.mjs:18",
+      "code": "    let mine = [...notes.values()].filter((n) => n.owner === owner)",
+      "issue": "Every list call copies and scans every note from every user (O(total notes) per request). This does not scale past a toy store, but the diff did not introduce it."
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "note": "Reviewers never see this file: bench.mjs build writes review repos that hold only the demo project and the change. Each bug is proven by proofs/<case>.test.mjs, which fails on the change and passes after fixes/<case>.patch (node bench.mjs verify-key).",
+  "cases": {
+    "since-filter": {
+      "kind": "bug",
+      "file": "src/store.mjs",
+      "snippet": "Number(n.id) >= since",
+      "defect": "Off-by-one: since=<id> should return notes created AFTER that id, but >= also returns the note with that id. The added test only checks a gap case where the boundary does not matter.",
+      "class": "boundary / off-by-one"
+    },
+    "delete-endpoint": {
+      "kind": "bug",
+      "file": "src/server.mjs",
+      "snippet": "if (!store.remove(idMatch[1])) return send(res, 404, { error: 'not found' })",
+      "defect": "Broken access control (IDOR): DELETE removes any note by id without checking the owner, so bob can delete alice's notes. GET right above it does check the owner.",
+      "class": "authorization"
+    },
+    "update-endpoint": {
+      "kind": "bug",
+      "file": "src/server.mjs",
+      "snippet": "const body = JSON.parse(raw)",
+      "defect": "Unhandled failure: the body is parsed inside a req.on('end') callback, outside the handler's try/catch. Invalid JSON (or a StoreError from update) throws there and crashes the whole server process instead of returning 400.",
+      "class": "error handling / crash"
+    },
+    "list-field-rename": {
+      "kind": "bug",
+      "file": "src/store.mjs",
+      "snippet": "return { notes: mine.slice(start, start + pageSize), total: mine.length, page, pageSize }",
+      "defect": "Contract break: the list response field items is renamed to notes, but src/client.mjs (not in the diff) still destructures items, so client.all() throws. Outside callers break the same way.",
+      "class": "contract / broken caller"
+    },
+    "persist-to-disk": {
+      "kind": "bug",
+      "file": "src/server.mjs",
+      "snippet": "store.save()",
+      "defect": "Missing await: save() returns a promise that is neither awaited nor caught. A failed write becomes an unhandled rejection that kills the process, and 201 is sent before the note is saved.",
+      "class": "async / unhandled rejection"
+    },
+    "validation-refactor": {
+      "kind": "bug",
+      "file": "src/store.mjs",
+      "snippet": "function validateText(text) {",
+      "defect": "Behavior lost in a refactor: validateText() drops the 500-character limit (MAX_TEXT is now unused), and the test that asserted it was edited out instead of kept.",
+      "class": "behavior change + weakened test"
+    },
+    "health-endpoint": {
+      "kind": "clean",
+      "defect": null,
+      "class": "clean: new unauthenticated /health route with a test; /notes still requires a token"
+    },
+    "page-size-cap": {
+      "kind": "clean",
+      "defect": null,
+      "class": "clean: pageSize clamped to 100 with a test"
+    }
+  }
+}

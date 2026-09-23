@@ -1,0 +1,32 @@
+{
+  "lens": "all",
+  "score": 3,
+  "summary": "Read src/server.mjs, test/notes.test.mjs, test/helpers.mjs, src/client.mjs, AGENTS.md and package.json in full, and grepped every createApp importer (only test/helpers.mjs). I ran npm test (7/7 pass) and sent live requests: the /health bypass is correctly scoped to GET /health. Moving the URL parse above the auth check means a malformed path from a caller with no token now gets a 500 instead of a 401.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:32",
+      "code": "      const url = new URL(req.url, 'http://localhost')",
+      "issue": "This diff moved the URL parse above the auth check. `new URL('//', 'http://localhost')` throws ERR_INVALID_URL. The catch only maps StoreError, so the error falls through to the 500 branch. I confirmed it live: `GET //` with no token now returns 500 {\"error\":\"internal error\"} and writes a stack trace to console.error. Before this change the same request returned 401. That breaks the house rule 'A bad request returns a 4xx JSON error', and it lets anyone without a token fill the error log.",
+      "fix": "Parse the URL defensively and return a 4xx: `let url; try { url = new URL(req.url, 'http://localhost') } catch { return send(res, 400, { error: 'bad request' }) }`. Add a test that `raw(app.base, 'GET', '//', { token: null })` returns status 400. fetch keeps the `//` path, so this test can be written."
+    },
+    {
+      "severity": "minor",
+      "file": "src/server.mjs:34",
+      "code": "      if (req.method === 'GET' && url.pathname === '/health') return send(res, 200, { ok: true })",
+      "issue": "Only GET is exempt from auth. Many uptime monitors send HEAD, and HEAD /health gets 401 here, so the endpoint may not fit the use case the comment names. The test also does not cover this.",
+      "fix": "Allow `(req.method === 'GET' || req.method === 'HEAD')` for /health, and add a test for the HEAD case. If this is a deliberate choice, note it in the comment."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:56-59",
+      "code": "    } catch (err) {\n      if (err instanceof StoreError) return send(res, err.status, { error: err.message })\n      console.error(err)\n      return send(res, 500, { error: 'internal error' })",
+      "issue": "Any error that is not a StoreError becomes a 500. Before this diff, an authenticated request with an invalid URL (for example `GET //` with a valid token) already returned 500 instead of 4xx."
+    }
+  ]
+}

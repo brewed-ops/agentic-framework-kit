@@ -1,0 +1,39 @@
+{
+  "lens": "quality",
+  "score": 3,
+  "summary": "The /health bypass works and its test passes (7/7 green), but moving URL parsing above the auth check means an unauthenticated request with a malformed URL now gets a 500 where it used to get a 401. Opened in full: src/server.mjs, test/notes.test.mjs, test/helpers.mjs, src/client.mjs, AGENTS.md, package.json. Grepped for health and new URL: no other callers. Ran npm test, then sent raw-socket requests to both the change and main server builds.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:32",
+      "code": "      const url = new URL(req.url, 'http://localhost')\n      // Uptime checks call this without a token.\n      if (req.method === 'GET' && url.pathname === '/health') return send(res, 200, { ok: true })",
+      "issue": "The diff moved URL parsing above the auth check. An unauthenticated request whose URL cannot be parsed (for example `GET http://[/x HTTP/1.1`) makes new URL throw a TypeError. The catch-all turns that into a 500 and calls console.error with the stack trace. Tested with raw sockets: main returns 401 for this request and the change returns 500. That breaks the house rule that a bad request gets a 4xx JSON error. It also lets anyone without a token spam the error log.",
+      "fix": "Wrap the parse so a bad URL returns a 400: `let url; try { url = new URL(req.url, 'http://localhost') } catch { return send(res, 400, { error: 'bad request url' }) }`. Add a test in test/notes.test.mjs that sends a malformed request-target over a raw net socket with no token and asserts a 4xx, not a 500."
+    },
+    {
+      "severity": "minor",
+      "file": "src/server.mjs:34",
+      "code": "      if (req.method === 'GET' && url.pathname === '/health') return send(res, 200, { ok: true })",
+      "issue": "The bypass only matches GET. `HEAD /health` still returns 401 (checked on a live server). Many uptime monitors use HEAD by default, so the new endpoint may still fail for the callers it was built for.",
+      "fix": "Match `(req.method === 'GET' || req.method === 'HEAD')`. Node drops the body for HEAD automatically. Add a HEAD assertion to the health test."
+    },
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:58",
+      "code": "test('health answers without a token', async () => {",
+      "issue": "The test covers the happy path and confirms /notes still returns 401. Nothing locks in the edges of the bypass: a POST or HEAD to /health, or /health/ with a trailing slash. A future change could widen the unauthenticated surface and no test would catch it.",
+      "fix": "Add assertions that `raw(app.base, 'POST', '/health', { token: null })` and `raw(app.base, 'GET', '/health/', { token: null })` return 401 (or whatever status is intended)."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:56",
+      "code": "    } catch (err) {\n      if (err instanceof StoreError) return send(res, err.status, { error: err.message })\n      console.error(err)\n      return send(res, 500, { error: 'internal error' })",
+      "issue": "For authenticated callers on main, a URL that new URL cannot parse already fell through to a 500 instead of a 4xx. The 500 existed before this diff and only moved earlier. The fix for the blocking finding also closes it."
+    }
+  ]
+}

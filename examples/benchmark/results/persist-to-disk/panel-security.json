@@ -1,0 +1,71 @@
+{
+  "lens": "security",
+  "score": 2,
+  "summary": "I read all of server.mjs, store.mjs and notes.test.mjs, plus client.mjs, helpers.mjs and AGENTS.md. I grepped for callers of createStore, save and remove. npm test passes 7/7. Two probes confirmed problems: a failed save() crashes the whole process (ENOENT, exit 1), and a non-numeric id in the loaded file makes nextId NaN, so new notes overwrite each other.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:46",
+      "code": "        store.save()",
+      "issue": "save() is async, but nothing awaits it or catches its error. If the write fails (missing directory, EACCES, ENOSPC, EISDIR), the rejection is unhandled and Node 24 ends the process. I reproduced it: NOTES_FILE pointed into a missing directory, one authenticated POST, exit=1. Any logged-in user can bring the server down this way, which breaks the house rule that a bad request never crashes the server. The handler's try/catch cannot help because the promise is never awaited.",
+      "fix": "Use `await store.save()` inside the existing try, so a write failure falls through to the 500 JSON path, or throw a StoreError(500/503) from save(). Add a test that points the store at an unwritable path, POSTs, and checks for a 5xx JSON reply and a server that still answers."
+    },
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:45-47",
+      "code": "        const note = store.create(user, body.text)\n        store.save()\n        return send(res, 201, note)",
+      "issue": "The response contract breaks and data can be lost. The server sends 201 with the note before the write has finished or succeeded. If the write fails, the caller has been told the note was saved when it never reached disk. The in-memory note also stays, so memory and the file drift apart until the next successful save or a restart silently drops it.",
+      "fix": "Await the save before calling send(). If the save fails, remove the note from the store (notes.delete(note.id)) and return a 5xx JSON error, so a 201 always means the note is on disk."
+    },
+    {
+      "severity": "major",
+      "file": "src/store.mjs:38-41",
+      "code": "  async function save() {\n    if (!file) return\n    await writeFile(file, JSON.stringify([...notes.values()]))\n  }",
+      "issue": "Two POSTs close together start overlapping writeFile calls on the same path, which Node's docs say is unsafe. Each call truncates and rewrites the file, so the result can be interleaved or truncated JSON, or an older snapshot finishing last and dropping a newer note. A crash during a write also leaves a partial file. On the next start, JSON.parse at store.mjs:11 throws, the server will not boot, and every user's notes are gone.",
+      "fix": "Queue the writes (let pending = Promise.resolve(); save = () => pending = pending.then(write)). Write to `${file}.tmp` and then rename() over the target so each write lands all at once."
+    },
+    {
+      "severity": "major",
+      "file": "src/store.mjs:10-13",
+      "code": "  if (file && existsSync(file)) {\n    for (const note of JSON.parse(readFileSync(file, 'utf8'))) notes.set(note.id, note)\n    nextId = Math.max(0, ...[...notes.keys()].map(Number)) + 1\n  }",
+      "issue": "Nothing checks the loaded file. (a) An empty or corrupt file, or a file that is not an array, throws at startup with no clear message. (b) One id that is not a number makes Math.max return NaN, so nextId stays NaN forever. Every new note then gets id 'NaN' and overwrites the previous one, even when the two notes have different owners. I reproduced it: eve's 'one' was replaced by 'two', and in a shared store one user's note could replace another's. (c) Math.max(...spread) throws a RangeError once the file holds tens of thousands of notes.",
+      "fix": "Check that the parsed value is an array of {id: numeric string, owner: string, text: string}, and fail with a clear message if it is not. Compute nextId with a reduce that skips non-integer ids, not a spread, e.g. ids.reduce((m, id) => Number.isInteger(+id) ? Math.max(m, +id) : m, 0) + 1."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:40",
+      "code": "    await writeFile(file, JSON.stringify([...notes.values()]))",
+      "issue": "One file holds every user's notes and owners, and it is written with the default mode (0o666 minus umask, usually 0644). Any local account can read it.",
+      "fix": "Pass `{ mode: 0o600 }` to writeFile and to the temp file used in the atomic write."
+    },
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:58-70",
+      "code": "test('notes survive a restart when a file is set', async () => {",
+      "issue": "The new test calls the store directly, so the changed HTTP path is untested: POST then save, a save failure, and two POSTs at once. helpers.startApp() uses createStore() with no file, so save() does nothing in every server test. The temp directory is also never deleted.",
+      "fix": "Add a server-level test with a file-backed store: POST, restart the app on the same file, then GET /notes/:id. Add a failure test with an unwritable path that expects a 5xx JSON reply and a server still alive. Delete the temp directory with rmSync(dir, {recursive: true}) in a finally block."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/store.mjs:34-36",
+      "code": "  function remove(id) {\n    return notes.delete(id)\n  }",
+      "issue": "remove() does not check the owner, and no route uses it. If a DELETE route calls it later without an owner check, any user could delete another user's notes (IDOR). With this change it also does not call save(), so a deletion would not persist."
+    },
+    {
+      "file": "src/server.mjs:32",
+      "code": "      const user = TOKENS[(req.headers.authorization ?? '').replace(/^Bearer /, '')]",
+      "issue": "The token lookup indexes a plain object, so inherited keys resolve. A token of '__proto__' returns Object.prototype, which is truthy, so auth passes and user is an object instead of a username. Owner comparisons then fail closed, but POST /notes would create a note with owner set to Object.prototype. Use a Map or Object.hasOwn."
+    },
+    {
+      "file": "src/server.mjs:52",
+      "code": "        return send(res, 200, note)",
+      "issue": "The response includes the internal `owner` field. It is part of the existing contract, but it means the username leaks out in every note."
+    }
+  ]
+}

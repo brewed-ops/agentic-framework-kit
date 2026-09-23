@@ -1,0 +1,44 @@
+{
+  "lens": "correctness",
+  "score": 2,
+  "summary": "The refactor drops the 500-character limit, so any note length is now accepted. The test that caught this was edited away instead of kept. Read src/store.mjs and test/notes.test.mjs in full; checked callers in src/server.mjs (POST /notes -> store.create), src/client.mjs (add), test/helpers.mjs and AGENTS.md.",
+  "coverage": {
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/store.mjs:4-6",
+      "code": "function validateText(text) {\n  if (typeof text !== 'string' || !text.trim()) throw new StoreError(400, 'text is required')\n}",
+      "issue": "The extracted validator only ports the empty-text check. The length check (`if (text.length > MAX_TEXT) throw new StoreError(400, ...)`) was deleted and not moved anywhere. POST /notes now accepts text of any length (server.mjs:45 calls store.create(user, body.text) with nothing checking length first). That is an unannounced behavior change on the create contract, and the in-memory store can now grow without limit from a single request.",
+      "fix": "Add the length check back inside validateText: `if (text.length > MAX_TEXT) throw new StoreError(400, `text is longer than ${MAX_TEXT} characters`)`, after the empty check."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:29-34",
+      "code": "test('empty notes are rejected', async () => {\n  const app = await startApp()\n  try {\n    assert.equal((await raw(app.base, 'POST', '/notes', { body: JSON.stringify({ text: '' }) })).status, 400)\n    assert.equal((await raw(app.base, 'POST', '/notes', { body: JSON.stringify({ text: '   ' }) })).status, 400)",
+      "issue": "The too-long assertion (`'x'.repeat(501)` -> 400) was removed and the test renamed. That is exactly the check that would fail against the new store.mjs, so the regression was hidden by weakening the test. This breaks the house rule 'never weaken a test to make it pass'. The new whitespace-only case is fine on its own, but it does not replace the removed coverage.",
+      "fix": "Restore the 501-char assertion and the original name 'empty and too-long notes are rejected'. Keep the whitespace-only assertion as an extra case. Also add a boundary case: exactly 500 chars returns 201."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:2",
+      "code": "const MAX_TEXT = 500",
+      "issue": "Nothing reads MAX_TEXT any more (dead constant). It is the leftover sign that the length validation was dropped.",
+      "fix": "Use it again in validateText as described above. Do not delete it."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:45",
+      "code": "return send(res, 201, store.create(user, body.text))",
+      "issue": "If the POST body is the JSON literal `null`, readJson returns null, `body.text` throws a TypeError, and the request returns a 500 instead of a 4xx (the house rule says a bad request gets a 4xx JSON error). Guard with `body?.text` or reject bodies that are not objects with a 400."
+    },
+    {
+      "file": "src/store.mjs:26-32",
+      "code": "function get(id) {\n    return notes.get(id) ?? null\n  }\n\n  function remove(id) {\n    return notes.delete(id)\n  }",
+      "issue": "get and remove do not check the owner. Ownership is enforced only in server.mjs for GET. Any future caller of remove (currently no route uses it) could delete another user's note."
+    }
+  ]
+}

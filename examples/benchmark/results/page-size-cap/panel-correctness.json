@@ -1,0 +1,42 @@
+{
+  "lens": "correctness",
+  "score": 4,
+  "summary": "Clamp is correct: Math.min runs after positiveInt, so the fallback and invalid values still give 20 and the store's offset uses the capped size, so page walking stays consistent. Read src/server.mjs, src/store.mjs, src/client.mjs, test/notes.test.mjs, test/helpers.mjs and AGENTS.md in full, and grepped pageSize/MAX_PAGE_SIZE. The only caller is client.all(), which uses pageSize=50 (under the cap) and stops on items.length/total, so it is not broken. All 7 tests pass. The one gap is that the new test does not prove the list itself is cut to 100.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:61",
+      "code": "    for (let i = 1; i <= 3; i++) await app.alice.add(`n${i}`)\n    const r = await raw(app.base, 'GET', '/notes?pageSize=1000')\n    assert.equal(r.body.pageSize, 100)\n    assert.equal(r.body.items.length, 3)",
+      "issue": "With only 3 notes, `items.length === 3` would also pass without the cap. The test only checks the echoed `pageSize` field, not that the server actually returns at most 100 items (the point of the change: one request cannot ask for the whole table). It also does not check the boundaries (pageSize=100 stays at 100, pageSize=101 becomes 100).",
+      "fix": "Seed 101+ notes (for example 105) and assert `r.body.items.length === 100` and `r.body.total === 105`. Optionally also assert that `/notes?pageSize=100` returns pageSize 100 and `/notes?page=2&pageSize=1000` returns the last 5 items."
+    },
+    {
+      "severity": "minor",
+      "file": "src/server.mjs:42",
+      "code": "        const pageSize = Math.min(positiveInt(url.searchParams.get('pageSize'), 20), MAX_PAGE_SIZE)",
+      "issue": "The cap is silent. An outside caller that asks for pageSize > 100 and treats `items.length < requestedPageSize` as the last page will now stop after the first 100 items and lose data. The response shape keeps its fields, and the capped value does come back in `pageSize`, but the page size a caller can get has changed. AGENTS.md treats the response as a contract, and the cap is not documented anywhere.",
+      "fix": "Document the 100 cap (README or AGENTS.md, and a comment next to client.all). Decide whether a pageSize over the limit should get a 400 JSON error instead of being silently capped. If silent capping stays, note that callers must use `total` or the returned `pageSize`, not the pageSize they asked for."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:46",
+      "code": "        const body = await readJson(req)\n        return send(res, 201, store.create(user, body.text))",
+      "issue": "A body of `null` (valid JSON) makes readJson resolve null, so `body.text` throws a TypeError and the request gets a 500 instead of a 4xx JSON error. This breaks the house rule that a bad request returns a 4xx. The same applies to any JSON body that is not an object and whose property access throws."
+    },
+    {
+      "file": "src/server.mjs:18",
+      "code": "    req.on('data', (chunk) => { raw += chunk })",
+      "issue": "No limit on body size. A client can stream a huge body into memory before the 500-character text check runs."
+    },
+    {
+      "file": "src/store.mjs:27",
+      "code": "  function remove(id) {\n    return notes.delete(id)\n  }",
+      "issue": "Dead code: no route calls `remove`, and it has no owner check, so any future route wired to it would let one user delete another user's note."
+    }
+  ]
+}

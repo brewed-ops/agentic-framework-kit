@@ -1,0 +1,52 @@
+{
+  "lens": "security",
+  "score": 1,
+  "summary": "The PATCH /notes/:id handler parses the body and calls store.update inside a req 'end' callback, outside the try/catch. A bad body throws an uncaught exception and takes the server down, which breaks the 'never crashes' house rule. Opened src/server.mjs, src/store.mjs, test/notes.test.mjs, test/helpers.mjs, src/client.mjs, AGENTS.md and package.json, and grepped for callers of update. npm test passes (0 failures). I ran repros: PATCH with '{nope' gave UNCAUGHT SyntaxError, PATCH with {text:''} gave UNCAUGHT StoreError, and bob's PATCH on alice's note correctly returned 404.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:57-60",
+      "code": "        req.on('end', () => {\n          const body = JSON.parse(raw)\n          send(res, 200, store.update(note.id, body.text))\n        })",
+      "issue": "This callback runs after handle() has already returned, so the surrounding try/catch never sees what it throws. Invalid JSON, an empty body (JSON.parse('')), a JSON null body (null.text), empty text or text over 500 characters (store.update throws StoreError) all throw an uncaught exception and crash the process. Any authenticated user can take the server down with one request. Confirmed by a repro: the '{nope' body and the {text:''} body each hit process 'uncaughtException'. This breaks the rule that a bad request gets a 4xx JSON error and never crashes the server. There is also no req 'error' listener, so a stream error is unhandled too.",
+      "fix": "Use the existing helper inside the try block, the same way POST does: `const body = await readJson(req); return send(res, 200, store.update(note.id, body.text))`. readJson turns bad JSON into StoreError(400), and the catch block already maps StoreError to a JSON 4xx. Delete the manual raw/on('data')/on('end') code."
+    },
+    {
+      "severity": "major",
+      "file": "test/notes.test.mjs:58-66",
+      "code": "test('a user can edit their note', async () => {",
+      "issue": "Only the happy path is tested. Nothing tests that bob gets 404 when he PATCHes alice's note (the ownership rule) or that his PATCH leaves the text unchanged. Nothing tests that invalid JSON, empty text or too-long text on PATCH returns 400 and the server keeps answering. The missing invalid-JSON test is why the crash above got through while the suite stayed green.",
+      "fix": "Add three tests. (1) raw PATCH with token 'token-bob' on alice's note returns 404, and alice.get still returns the original text. (2) PATCH with body '{nope' returns 400, and a follow-up GET /notes returns 200. (3) PATCH with {text:''} and with 'x'.repeat(501) each return 400."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:27-32",
+      "code": "  function update(id, text) {\n    const note = notes.get(id)\n    if (typeof text !== 'string' || !text.trim()) throw new StoreError(400, 'text is required')\n    if (text.length > MAX_TEXT) throw new StoreError(400, `text is longer than ${MAX_TEXT} characters`)\n    note.text = text",
+      "issue": "update() does not check whether the note exists. Called with a missing id, it throws a TypeError on `note.text` instead of a StoreError. The server currently checks existence first, but it looks the note up before reading the body. Once the body read is async, a DELETE route (remove() already exists) could delete the note in between and this line would fail. store.update is the new public contract, and it should handle this case itself.",
+      "fix": "Add `if (!note) throw new StoreError(404, 'not found')` right after the lookup."
+    },
+    {
+      "severity": "minor",
+      "file": "src/server.mjs:52",
+      "code": "      if (req.method === 'PATCH' && idMatch) {",
+      "issue": "Contract drift. src/client.mjs says 'keep it in step with server.mjs', but it has no update method, so outside callers have no supported way to use the new endpoint. The test has to go through raw() instead of the client.",
+      "fix": "Add `update: (id, text) => call('PATCH', `/notes/${encodeURIComponent(id)}`, { text })` to createClient, and use app.alice.update in the test."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:6",
+      "code": "const TOKENS = { 'token-alice': 'alice', 'token-bob': 'bob' }",
+      "issue": "Bearer tokens are hardcoded in source (a demo stub, noted in the comment). They should come from config or a database."
+    },
+    {
+      "file": "src/server.mjs:13-22",
+      "code": "function readJson(req) {",
+      "issue": "The request body size is not limited. A large body is read fully into memory (memory-exhaustion DoS). This affects POST, and PATCH once it uses readJson."
+    }
+  ]
+}

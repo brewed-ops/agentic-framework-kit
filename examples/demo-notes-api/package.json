@@ -1,0 +1,12 @@
+{
+  "name": "demo-notes-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tiny notes API used as the base for the greploop benchmark. Zero dependencies.",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "lint": "node --check src/store.mjs && node --check src/server.mjs && node --check src/client.mjs"
+  }
+}

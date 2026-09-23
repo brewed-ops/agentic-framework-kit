@@ -1,0 +1,37 @@
+{
+  "lens": "quality",
+  "score": 4,
+  "summary": "The clamp is correct and in the right place, and every house rule holds: auth runs first, there is no new crash path, the response keys are unchanged, a test was added and no dependencies. The new test only uses 3 notes, so it checks the echoed pageSize but never proves that items actually stop at 100. Read src/server.mjs, test/notes.test.mjs, test/helpers.mjs, src/store.mjs, src/client.mjs and AGENTS.md in full. Grepped pageSize/MAX_PAGE_SIZE across the repo; the only caller is client.all() with pageSize=50, which is under the cap and ends on total, so it is not broken. npm test passes 7/7 and lint is clean.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:61",
+      "code": "    for (let i = 1; i <= 3; i++) await app.alice.add(`n${i}`)\n    const r = await raw(app.base, 'GET', '/notes?pageSize=1000')\n    assert.equal(r.body.pageSize, 100)\n    assert.equal(r.body.items.length, 3)",
+      "issue": "With only 3 notes, `items.length === 3` is true whether or not the cap applies. The only thing the test checks is the echoed `pageSize` field. It never shows that the item list is cut to 100, which is the whole point of the change ('one request cannot ask for the whole table'). The test would still pass if the cap were applied only to the echoed value and not to the slice.",
+      "fix": "Seed 101+ notes (for example `for (let i = 1; i <= 101; i++)`). Then assert `r.body.items.length === 100` and `r.body.total === 101`. Optionally also assert that `page=2&pageSize=1000` returns the single remaining item."
+    },
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:58",
+      "code": "test('page size is capped at 100', async () => {",
+      "issue": "The boundary is not tested. Nothing checks that pageSize=100 is passed through unchanged and that 101 is clamped. An off-by-one (for example a future `< MAX_PAGE_SIZE` check or `MAX_PAGE_SIZE - 1`) would slip through.",
+      "fix": "Add asserts that `/notes?pageSize=100` echoes 100 and `/notes?pageSize=101` echoes 100."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/store.mjs:18",
+      "code": "    const mine = [...notes.values()].filter((n) => n.owner === owner)",
+      "issue": "Every list request copies and filters the whole notes Map, which is O(total notes across all users). That happens on every page, so client.all() does O(pages * N) work. The page-size cap limits the response size but not this scan."
+    },
+    {
+      "file": "src/server.mjs:18",
+      "code": "    req.on('data', (chunk) => { raw += chunk })",
+      "issue": "The request body has no size limit. A large POST body is fully buffered in memory before the 500-char text check runs. The new cap guards the response size, but request size is still unbounded."
+    }
+  ]
+}

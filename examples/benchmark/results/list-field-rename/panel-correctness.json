@@ -1,0 +1,37 @@
+{
+  "lens": "correctness",
+  "score": 2,
+  "summary": "The list response field was renamed from items to notes, which breaks src/client.mjs all(): I ran it and it throws 'items is not iterable'. The 6 tests pass only because none of them calls all(). Opened src/store.mjs, test/notes.test.mjs, src/client.mjs, src/server.mjs, test/helpers.mjs and AGENTS.md, and grepped the repo for 'items'.",
+  "coverage": {
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/store.mjs:20",
+      "code": "    return { notes: mine.slice(start, start + pageSize), total: mine.length, page, pageSize }",
+      "issue": "This renames a field in the GET /notes response, which breaks the house rule that response shapes are a contract. The caller in src/client.mjs:21-23 (`const { items, total } = await call(...)`, then `out.push(...items)`) now gets items === undefined. createClient().all() throws a TypeError on every call ('items is not iterable'), so every outside tool that imports the client and uses all() is broken.",
+      "fix": "Keep the `items` key, and revert this line and the two test assertions. If the rename is really wanted, update src/client.mjs all() in the same change (`const { notes, total } = ...; out.push(...notes); if (!notes.length || ...)`) and treat it as a breaking API change for outside callers. Adding `notes` alongside `items` for a deprecation period is another option."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:52",
+      "code": "    assert.deepEqual(p1.notes.map((n) => n.text), ['a1', 'a2'])\n    assert.deepEqual(p3.notes.map((n) => n.text), ['a5'])",
+      "issue": "The test was edited to follow the new shape, and no test was added for the broken client caller. As a result the suite stays green (6/6 pass) while createClient().all() fails. That breaks the house rule that every behavior change needs a test and that tests are never weakened to make them pass: the old assertions were the only thing guarding the response shape.",
+      "fix": "Add a test that seeds more than 50 notes (or uses several pages) and checks that `app.alice.all()` returns all of them. This covers the client/server contract, and it fails on the current diff."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:45",
+      "code": "        return send(res, 201, store.create(user, body.text))",
+      "issue": "A POST body of the JSON literal `null` makes readJson resolve to null. `body.text` then throws a TypeError, which falls through to a 500 when it should be a 4xx. This is outside the diff."
+    },
+    {
+      "file": "src/client.mjs:17",
+      "code": "    async all() {",
+      "issue": "No test calls client.all(), so a regression in the list response shape is invisible to the suite. This gap is what let the current break through."
+    }
+  ]
+}

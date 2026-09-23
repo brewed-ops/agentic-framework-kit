@@ -1,0 +1,54 @@
+{
+  "lens": "correctness",
+  "score": 1,
+  "summary": "The unawaited store.save() on POST /notes crashes the whole server when the disk write fails. I confirmed it with a live repro: NOTES_FILE set to a missing dir gives an unhandled ENOENT rejection and exit=1. Opened src/server.mjs, src/store.mjs, test/notes.test.mjs, test/helpers.mjs, src/client.mjs, AGENTS.md and package.json. createStore/save/remove callers were found only in server.mjs and notes.test.mjs. npm test passes.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:46",
+      "code": "        store.save()",
+      "issue": "save() is async, but here it is neither awaited nor .catch()ed. If writeFile rejects (ENOENT, EACCES, ENOSPC, EISDIR), the rejection is unhandled and Node 15+ kills the process. That breaks the rule that a bad request never crashes the server. I reproduced it: POST /notes with NOTES_FILE under a missing directory, and the process died with exit code 1. Because the write is not awaited, the handler also sends 201 before the note is on disk, so the client is told it was saved even when the write fails.",
+      "fix": "Use `await store.save()` inside the existing try block, so a failure is caught and becomes a JSON 500 instead of a crash, and the 201 goes out only after the write succeeds. If the write fails, roll back the in-memory note (or remove it) so memory and disk stay in step."
+    },
+    {
+      "severity": "major",
+      "file": "src/store.mjs:38-41",
+      "code": "  async function save() {\n    if (!file) return\n    await writeFile(file, JSON.stringify([...notes.values()]))\n  }",
+      "issue": "Nothing serializes the writes, and they are not atomic. Concurrent POSTs start overlapping writeFile calls on the same path, which Node documents as unsafe. An older snapshot can finish last and drop a newer note, or the file can end up interleaved or truncated. A crash in the middle of a write also leaves a partial file. On the next start, JSON.parse at line 11 then throws and the server cannot boot, so every note is lost.",
+      "fix": "Chain writes through one promise queue (`let pending = Promise.resolve(); save = () => (pending = pending.then(write, write))`). Write to `${file}.tmp` and then `rename` it over `file` so each write is atomic."
+    },
+    {
+      "severity": "major",
+      "file": "src/store.mjs:10-13",
+      "code": "  if (file && existsSync(file)) {\n    for (const note of JSON.parse(readFileSync(file, 'utf8'))) notes.set(note.id, note)\n    nextId = Math.max(0, ...[...notes.keys()].map(Number)) + 1\n  }",
+      "issue": "There is no guard on loading. An empty, truncated or non-array file makes startup throw an unclear SyntaxError or 'not iterable' error with no hint that NOTES_FILE is the cause. The non-atomic save above makes such a file realistic. A non-numeric id makes nextId NaN, so every later id is 'NaN' and notes collide. Spreading every key into Math.max throws RangeError once the store holds very many notes.",
+      "fix": "Wrap the load in try/catch and rethrow with a clear message that names the file (or refuse to start). Check that the parsed value is an array of objects with string ids. Compute nextId with a reduce loop that skips non-finite ids instead of spreading."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:34-43",
+      "code": "  return { create, list, get, remove, save }",
+      "issue": "Persistence covers only create. remove() changes the map but nothing saves afterwards, so a deleted note comes back after a restart once a delete route or another caller uses remove. Today remove has no callers.",
+      "fix": "Have mutations persist themselves, for example remove() and create() calling save(), or document that callers must save after every mutation. Add a test for delete followed by restart when a delete path exists."
+    },
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:58-70",
+      "code": "test('notes survive a restart when a file is set', async () => {",
+      "issue": "The test exercises only the store directly. The server change (POST calling save, and NOTES_FILE wiring through createApp) has no test, so the unawaited, crashing save() passes the suite. Nothing covers a failing write, concurrent POSTs, or a corrupt file on load. The temp directory is never removed.",
+      "fix": "Add an HTTP-level test that starts createApp(createStore({ file })), POSTs, and checks the file contents after the response. Add one where the write fails and expect a JSON 5xx with the server still answering. Add one that sends parallel POSTs and checks every note is in the file. Remove the temp directory with rmSync(dir, { recursive: true, force: true }) in finally."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/store.mjs:34-36",
+      "code": "  function remove(id) {\n    return notes.delete(id)\n  }",
+      "issue": "remove() takes no owner and does no ownership check. Any future route that uses it would let one user delete another user's note. It has no callers today."
+    }
+  ]
+}

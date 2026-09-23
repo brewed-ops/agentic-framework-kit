@@ -1,0 +1,45 @@
+{
+  "lens": "all",
+  "score": 1,
+  "summary": "DELETE /notes/:id lets any signed-in user delete any other user's note because it never checks the owner. That is an IDOR and breaks the house rule that a user only changes their own notes. I read src/server.mjs, src/client.mjs, src/store.mjs, test/notes.test.mjs and test/helpers.mjs in full, grepped the repo for remove/createClient callers, and ran npm test (7/7 pass). The tests pass because no test tries a cross-user delete.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/client.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:52-55",
+      "code": "      if (req.method === 'DELETE' && idMatch) {\n        if (!store.remove(idMatch[1])) return send(res, 404, { error: 'not found' })\n        return send(res, 200, { deleted: idMatch[1] })\n      }",
+      "issue": "Broken access control (IDOR). store.remove(id) deletes by id alone, and the handler never checks note.owner against the caller. Bob can delete Alice's note just by sending DELETE /notes/1. This breaks the MUST-CHECK rule 'a user only ever sees or changes their own notes'. The GET branch just above does check the owner.",
+      "fix": "Look up the note and check who owns it before removing it: `const note = store.get(idMatch[1]); if (!note || note.owner !== user) return send(res, 404, { error: 'not found' }); store.remove(note.id); return send(res, 200, { deleted: note.id })`. It returns 404, not 403, just like GET, so the response does not reveal that the note exists."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:58-65",
+      "code": "test('a user can delete their note', async () => {\n  const app = await startApp()\n  try {\n    const note = await app.alice.add('temp')\n    assert.deepEqual(await app.alice.remove(note.id), { deleted: note.id })\n    assert.equal((await raw(app.base, 'GET', `/notes/${note.id}`)).status, 404)\n  } finally { await app.close() }\n})",
+      "issue": "Only the happy path is tested. No test covers the authz part of the change (another user deleting the note) or deleting an id that does not exist. That gap is why the IDOR above passes CI. The house rule says every behavior change needs a test, and the risky part here has none.",
+      "fix": "Add a test where Bob sends `raw(app.base, 'DELETE', `/notes/${note.id}`, { token: 'token-bob' })`. Assert the status is 404, then assert `(await app.alice.get(note.id)).text === 'secret'` to prove the note is still there. Also add a test that DELETE on a missing id returns 404, and one that DELETE without a token returns 401."
+    },
+    {
+      "severity": "minor",
+      "file": "src/server.mjs:54",
+      "code": "        return send(res, 200, { deleted: idMatch[1] })",
+      "issue": "This adds a new response shape, { deleted: id }, and the shape is part of the contract. It uses the raw regex capture, which is still URL-encoded, rather than the id the store actually holds. Today's ids are numeric, so the two are the same, but the contract should echo the stored id.",
+      "fix": "Return `{ deleted: note.id }` from the looked-up note (this follows naturally from the blocking fix)."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:36",
+      "code": "      const idMatch = url.pathname.match(/^\\/notes\\/([^/]+)$/)",
+      "issue": "The id captured from the path is never passed through decodeURIComponent, but client.mjs encodes ids with encodeURIComponent. Any id containing reserved characters would not match on the server. It is harmless now because ids are numeric strings, and GET already behaves this way."
+    },
+    {
+      "file": "src/store.mjs:27-29",
+      "code": "  function remove(id) {\n    return notes.delete(id)\n  }",
+      "issue": "The store's remove() does not scope by owner, unlike list(owner). Every caller has to remember to check ownership. A remove(owner, id) signature would make the IDOR above impossible to write. This is outside the bundle and was not changed by this diff."
+    }
+  ]
+}

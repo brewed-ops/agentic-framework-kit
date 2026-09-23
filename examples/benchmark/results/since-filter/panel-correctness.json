@@ -1,0 +1,40 @@
+{
+  "lens": "correctness",
+  "score": 3,
+  "summary": "Off-by-one: since=N returns note N itself, although the doc comment says the filter keeps only notes created after N. The new test passes by coincidence because id 2 belongs to bob. Read server.mjs, store.mjs, notes.test.mjs, helpers.mjs, client.mjs and AGENTS.md in full. Grepped for list(/since callers; the only caller is server.mjs:42, and client.mjs never sends since. npm test passes 7/7. A direct store.list('a',{since:1}) returned [\"old\",\"new\"], which shows the off-by-one.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "major",
+      "file": "src/store.mjs:19",
+      "code": "    if (since !== undefined) mine = mine.filter((n) => Number(n.id) >= since)",
+      "issue": "Off-by-one. The comment on line 16 says 'only notes created after the note with that id', but `>=` includes the note whose id equals `since`. A caller polling with since=<last seen id> gets that note back again on every poll. Reproduced: create 'old' (id 1) and 'new' (id 2), then list({since:1}) returns ['old','new'] instead of ['new'].",
+      "fix": "Use a strict comparison: `mine.filter((n) => Number(n.id) > since)`."
+    },
+    {
+      "severity": "major",
+      "file": "test/notes.test.mjs:64",
+      "code": "    const r = await raw(app.base, 'GET', '/notes?since=2')",
+      "issue": "The test cannot catch the off-by-one. Id 2 belongs to bob, so the owner filter drops it before the since boundary is checked, and the test passes with both `>=` and `>`. The boundary this change introduces has no test, so the house rule that every behavior change needs a test is only met in name.",
+      "fix": "Put the boundary on one of alice's own notes. Example: alice adds 'old' (id 1), bob adds 'not mine' (id 2), alice adds 'new' (id 3); request `/notes?since=1` and assert ['new']. Also assert `total` equals 1 so the pagination total is shown to respect the filter."
+    },
+    {
+      "severity": "minor",
+      "file": "src/server.mjs:41",
+      "code": "        const since = url.searchParams.has('since') ? positiveInt(url.searchParams.get('since'), 0) : undefined",
+      "issue": "A malformed `since` (`since=abc`, `since=-5`, `since=1.5`, `since=`) silently falls back to 0 and returns every note. A client with a typo gets a full resync instead of a 4xx error, which works against the rule that a bad request returns a 4xx JSON error. Page and pageSize already fall back silently, so this copies an existing pattern. There is also no test for invalid input.",
+      "fix": "Return a 400 when `since` is present but not a non-negative integer, for example `throw new StoreError(400, 'since must be a non-negative integer')`, and add a test for it. If the silent fallback is intended, document it and add a test that pins it."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:39",
+      "code": "        const page = positiveInt(url.searchParams.get('page'), 1)",
+      "issue": "Invalid page and pageSize values silently fall back to defaults instead of returning a 4xx. pageSize also has no upper bound, so pageSize=1e9 is accepted."
+    }
+  ]
+}

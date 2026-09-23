@@ -1,0 +1,25 @@
+{
+  "lens": "all",
+  "score": 4,
+  "summary": "The pageSize clamp in GET /notes is correct and keeps the response shape. The new test fails without the change and all 7 tests pass. Opened src/server.mjs, test/notes.test.mjs, src/store.mjs, src/client.mjs, test/helpers.mjs and AGENTS.md, and grepped for pageSize and MAX_PAGE_SIZE. The only caller, client.all(), uses pageSize=50 (under the cap) and stops paging on total, so nothing breaks. Auth, the 4xx path and no-deps are all unaffected. One minor test gap.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:61-64",
+      "code": "    for (let i = 1; i <= 3; i++) await app.alice.add(`n${i}`)\n    const r = await raw(app.base, 'GET', '/notes?pageSize=1000')\n    assert.equal(r.body.pageSize, 100)\n    assert.equal(r.body.items.length, 3)",
+      "issue": "With only 3 notes, `items.length === 3` is true with or without the cap, so the test never shows that items are actually cut at 100. Only the echoed `pageSize` proves the clamp. It also skips the edge values: pageSize=100 should pass through unchanged, and pageSize=101 should come back as 100.",
+      "fix": "Seed 101+ notes (or at least check pageSize=100 and pageSize=101 separately) and assert `items.length === 100` along with `pageSize === 100`. Also add a check that `?pageSize=100` returns 100 unchanged."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/store.mjs:18",
+      "code": "    const mine = [...notes.values()].filter((n) => n.owner === owner)",
+      "issue": "Every list request scans and copies the whole notes table before slicing. The page cap limits response size, not the cost of each request. A caller can still read everything by walking through the pages."
+    }
+  ]
+}

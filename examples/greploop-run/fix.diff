@@ -1,0 +1,56 @@
+diff --git a/src/server.mjs b/src/server.mjs
+index 0e1348c..250e681 100644
+--- a/src/server.mjs
++++ b/src/server.mjs
+@@ -38,7 +38,9 @@ export function createApp(store = createStore()) {
+       if (req.method === 'GET' && url.pathname === '/notes') {
+         const page = positiveInt(url.searchParams.get('page'), 1)
+         const pageSize = positiveInt(url.searchParams.get('pageSize'), 20)
+-        const since = url.searchParams.has('since') ? positiveInt(url.searchParams.get('since'), 0) : undefined
++        const rawSince = url.searchParams.get('since')
++        if (rawSince !== null && !/^[0-9]+$/.test(rawSince)) return send(res, 400, { error: 'since must be a whole number' })
++        const since = rawSince === null ? undefined : Number(rawSince)
+         return send(res, 200, store.list(user, { page, pageSize, since }))
+       }
+       if (req.method === 'POST' && url.pathname === '/notes') {
+diff --git a/src/store.mjs b/src/store.mjs
+index 24b4ca4..7d850b8 100644
+--- a/src/store.mjs
++++ b/src/store.mjs
+@@ -16,7 +16,7 @@ export function createStore() {
+   // page is 1-based. since: only notes created after the note with that id.
+   function list(owner, { page = 1, pageSize = 20, since } = {}) {
+     let mine = [...notes.values()].filter((n) => n.owner === owner)
+-    if (since !== undefined) mine = mine.filter((n) => Number(n.id) >= since)
++    if (since !== undefined) mine = mine.filter((n) => Number(n.id) > since)
+     const start = (page - 1) * pageSize
+     return { items: mine.slice(start, start + pageSize), total: mine.length, page, pageSize }
+   }
+diff --git a/test/notes.test.mjs b/test/notes.test.mjs
+index 6594dd0..fd6550e 100644
+--- a/test/notes.test.mjs
++++ b/test/notes.test.mjs
+@@ -58,10 +58,21 @@ test('list pages through only the caller\'s notes', async () => {
+ test('since returns only the newer notes', async () => {
+   const app = await startApp()
+   try {
+-    await app.alice.add('old')
++    const old = await app.alice.add('old')
+     await app.bob.add('not mine')
+     await app.alice.add('new')
+-    const r = await raw(app.base, 'GET', '/notes?since=2')
++    // The boundary is one of the caller's own notes: it must not come back.
++    const r = await raw(app.base, 'GET', `/notes?since=${old.id}`)
+     assert.deepEqual(r.body.items.map((n) => n.text), ['new'])
++    assert.equal(r.body.total, 1)
++  } finally { await app.close() }
++})
++
++test('a malformed since is a 400', async () => {
++  const app = await startApp()
++  try {
++    for (const bad of ['abc', '-1', '1.5', '']) {
++      assert.equal((await raw(app.base, 'GET', `/notes?since=${bad}`)).status, 400, `since=${bad}`)
++    }
+   } finally { await app.close() }
+ })

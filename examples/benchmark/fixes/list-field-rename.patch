@@ -1,0 +1,20 @@
+From: bench <bench@example.com>
+Subject: [PATCH] fix: reference fix for list-field-rename
+
+---
+ src/client.mjs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/client.mjs b/src/client.mjs
+index 7ac553f..76d1453 100644
+--- a/src/client.mjs
++++ b/src/client.mjs
+@@ -18,7 +18,7 @@ export function createClient(baseUrl, token) {
+     async all() {
+       const out = []
+       for (let page = 1; ; page++) {
+-        const { items, total } = await call('GET', `/notes?page=${page}&pageSize=50`)
++        const { notes: items, total } = await call('GET', `/notes?page=${page}&pageSize=50`)
+         out.push(...items)
+         if (!items.length || out.length >= total) return out
+       }

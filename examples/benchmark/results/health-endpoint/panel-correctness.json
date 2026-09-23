@@ -1,0 +1,39 @@
+{
+  "lens": "correctness",
+  "score": 3,
+  "summary": "Read src/server.mjs and test/notes.test.mjs in full, plus test/helpers.mjs, src/client.mjs, AGENTS.md and package.json. Grepped for createApp, health and new URL: the only callers are test/helpers.mjs and the server's own entry point, and none are broken. npm test passes 7/7. A live socket probe against main and against change found a new 500 for unauthenticated requests: moving URL parsing ahead of the auth check turns a request that got 401 on main into an unhandled 500 on change.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:32",
+      "code": "      const url = new URL(req.url, 'http://localhost')",
+      "issue": "This diff moves URL parsing ahead of the token check. For a request target like `//`, `new URL('//', 'http://localhost')` throws ERR_INVALID_URL. The catch block treats that as an unknown error, logs it with console.error and returns 500. I probed with a raw `GET // HTTP/1.1` and no token: main returns 401, change returns 500 and prints a stack trace. This breaks the house rule that a bad request returns a 4xx JSON error. It also means anyone without a token can now fill the server log with stack traces before auth runs.",
+      "fix": "Parse the URL defensively and return a 4xx on failure. For example: `let url; try { url = new URL(req.url, 'http://localhost') } catch { return send(res, 400, { error: 'bad request' }) }`. Alternatively, test the raw path (`req.url.split('?')[0] === '/health'`) before auth and keep `new URL` where it was, after auth. Add a test that a malformed target such as `//` with no token gets a 4xx and never a 500. `fetch` normalizes paths, so that test needs a raw `node:net` socket or `http.request` with `path: '//'`."
+    },
+    {
+      "severity": "minor",
+      "file": "src/server.mjs:34",
+      "code": "      if (req.method === 'GET' && url.pathname === '/health') return send(res, 200, { ok: true })",
+      "issue": "The exemption only matches GET on exactly `/health`. Many uptime checkers send HEAD, and some add a trailing slash. I probed both: `HEAD /health` and `GET /health/` still return 401 unauthorized. That goes against the stated goal: 'Uptime checks call this without a token.'",
+      "fix": "Accept HEAD as well: `(req.method === 'GET' || req.method === 'HEAD')`. Node drops the body on HEAD automatically. Optionally also match `/health/`. Add a test for HEAD if you support it."
+    },
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:58",
+      "code": "test('health answers without a token', async () => {",
+      "issue": "The test covers only the happy path: GET /health without a token, and /notes still returning 401. It does not check that a request with a token (valid or invalid) also gets 200 from /health. It also does not cover the new pre-auth failure path, a malformed URL without a token, which is where the regression above happens.",
+      "fix": "Add assertions that `raw(app.base, 'GET', '/health')` with the default token and with `{ token: 'bogus' }` both return 200 `{ ok: true }`. Add the malformed-URL 4xx test described in the first finding."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:56-59",
+      "code": "    } catch (err) {\n      if (err instanceof StoreError) return send(res, err.status, { error: err.message })\n      console.error(err)\n      return send(res, 500, { error: 'internal error' })",
+      "issue": "On main, an authenticated request with target `//` already reached `new URL` after auth and got a 500, because the catch block treats any non-StoreError as internal. That is a 4xx-rule violation for authenticated callers too. The diff only widened it to callers with no token."
+    }
+  ]
+}

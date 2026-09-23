@@ -1,0 +1,33 @@
+{
+  "lens": "correctness",
+  "score": 1,
+  "summary": "DELETE /notes/:id never checks the note's owner, so any signed-in user can delete another user's note (data loss, house-rule violation). The new test only covers the owner's own delete. Opened src/server.mjs, src/client.mjs, src/store.mjs (store.remove is unchanged and has no owner argument), test/helpers.mjs, test/notes.test.mjs and AGENTS.md. Grepped `remove` across src/ and test/: its only callers are server.mjs:53 and test line 62.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/client.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:52-55",
+      "code": "      if (req.method === 'DELETE' && idMatch) {\n        if (!store.remove(idMatch[1])) return send(res, 404, { error: 'not found' })\n        return send(res, 200, { deleted: idMatch[1] })\n      }",
+      "issue": "The route has no ownership check. store.remove(id) deletes by id alone, so bob can send DELETE /notes/1 with token-bob, delete alice's note and get a 200 back. This breaks the AGENTS.md rule 'a user only ever sees or changes their own notes'. Because ids are sequential ('1', '2', ...), a user can delete every note in the store. The GET route next to it guards with `note.owner !== user`, and DELETE does not.",
+      "fix": "Look up the note and check its owner before removing it, and return the same 404 as GET so the endpoint does not reveal which ids exist: `const note = store.get(idMatch[1]); if (!note || note.owner !== user) return send(res, 404, { error: 'not found' }); store.remove(note.id); return send(res, 200, { deleted: note.id })`."
+    },
+    {
+      "severity": "major",
+      "file": "test/notes.test.mjs:58-65",
+      "code": "test('a user can delete their note', async () => {\n  const app = await startApp()\n  try {\n    const note = await app.alice.add('temp')\n    assert.deepEqual(await app.alice.remove(note.id), { deleted: note.id })\n    assert.equal((await raw(app.base, 'GET', `/notes/${note.id}`)).status, 404)\n  } finally { await app.close() }\n})",
+      "issue": "The test covers only the owner deleting their own note. Nothing tests that another user cannot delete it, which is why the missing owner check above still passes the suite. Deleting an id that does not exist (the 404 path) is also untested.",
+      "fix": "Add a test in which bob sends `raw(app.base, 'DELETE', `/notes/${note.id}`, { token: 'token-bob' })`. Assert that the status is 404 and that `app.alice.get(note.id)` still returns the note. Also assert that a DELETE on an unknown id returns 404."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:36",
+      "code": "      const idMatch = url.pathname.match(/^\\/notes\\/([^/]+)$/)",
+      "issue": "The server uses the captured id without decoding it, while client.mjs encodes ids with encodeURIComponent. Any id that needs encoding would never match a stored note. This does not show up today because ids are numeric strings, and GET already had the same pattern before this diff."
+    }
+  ]
+}

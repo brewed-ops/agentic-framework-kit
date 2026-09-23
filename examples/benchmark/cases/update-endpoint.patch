@@ -1,0 +1,74 @@
+From: bench <bench@example.com>
+Subject: [PATCH] feat: PATCH /notes/:id to edit a note
+
+---
+ src/server.mjs      | 11 +++++++++++
+ src/store.mjs       | 10 +++++++++-
+ test/notes.test.mjs | 10 ++++++++++
+ 3 files changed, 30 insertions(+), 1 deletion(-)
+
+diff --git a/src/server.mjs b/src/server.mjs
+index e090f3c..5fd662f 100644
+--- a/src/server.mjs
++++ b/src/server.mjs
+@@ -49,6 +49,17 @@ export function createApp(store = createStore()) {
+         if (!note || note.owner !== user) return send(res, 404, { error: 'not found' })
+         return send(res, 200, note)
+       }
++      if (req.method === 'PATCH' && idMatch) {
++        const note = store.get(idMatch[1])
++        if (!note || note.owner !== user) return send(res, 404, { error: 'not found' })
++        let raw = ''
++        req.on('data', (chunk) => { raw += chunk })
++        req.on('end', () => {
++          const body = JSON.parse(raw)
++          send(res, 200, store.update(note.id, body.text))
++        })
++        return
++      }
+       return send(res, 404, { error: 'not found' })
+     } catch (err) {
+       if (err instanceof StoreError) return send(res, err.status, { error: err.message })
+diff --git a/src/store.mjs b/src/store.mjs
+index a2e8d38..5d7d763 100644
+--- a/src/store.mjs
++++ b/src/store.mjs
+@@ -24,11 +24,19 @@ export function createStore() {
+     return notes.get(id) ?? null
+   }
+ 
++  function update(id, text) {
++    const note = notes.get(id)
++    if (typeof text !== 'string' || !text.trim()) throw new StoreError(400, 'text is required')
++    if (text.length > MAX_TEXT) throw new StoreError(400, `text is longer than ${MAX_TEXT} characters`)
++    note.text = text
++    return note
++  }
++
+   function remove(id) {
+     return notes.delete(id)
+   }
+ 
+-  return { create, list, get, remove }
++  return { create, list, get, update, remove }
+ }
+ 
+ export class StoreError extends Error {
+diff --git a/test/notes.test.mjs b/test/notes.test.mjs
+index 0d5b488..012d4c3 100644
+--- a/test/notes.test.mjs
++++ b/test/notes.test.mjs
+@@ -54,3 +54,13 @@ test('list pages through only the caller\'s notes', async () => {
+     assert.equal(p1.total, 5)
+   } finally { await app.close() }
+ })
++
++test('a user can edit their note', async () => {
++  const app = await startApp()
++  try {
++    const note = await app.alice.add('draft')
++    const r = await raw(app.base, 'PATCH', `/notes/${note.id}`, { body: JSON.stringify({ text: 'final' }) })
++    assert.equal(r.status, 200)
++    assert.equal((await app.alice.get(note.id)).text, 'final')
++  } finally { await app.close() }
++})

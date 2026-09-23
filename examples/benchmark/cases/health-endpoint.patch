@@ -1,0 +1,45 @@
+From: bench <bench@example.com>
+Subject: [PATCH] feat: GET /health for uptime checks
+
+---
+ src/server.mjs      |  5 ++++-
+ test/notes.test.mjs | 10 ++++++++++
+ 2 files changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/src/server.mjs b/src/server.mjs
+index e090f3c..0637b45 100644
+--- a/src/server.mjs
++++ b/src/server.mjs
+@@ -29,10 +29,13 @@ function positiveInt(value, fallback) {
+ export function createApp(store = createStore()) {
+   return async function handle(req, res) {
+     try {
++      const url = new URL(req.url, 'http://localhost')
++      // Uptime checks call this without a token.
++      if (req.method === 'GET' && url.pathname === '/health') return send(res, 200, { ok: true })
++
+       const user = TOKENS[(req.headers.authorization ?? '').replace(/^Bearer /, '')]
+       if (!user) return send(res, 401, { error: 'unauthorized' })
+ 
+-      const url = new URL(req.url, 'http://localhost')
+       const idMatch = url.pathname.match(/^\/notes\/([^/]+)$/)
+ 
+       if (req.method === 'GET' && url.pathname === '/notes') {
+diff --git a/test/notes.test.mjs b/test/notes.test.mjs
+index 0d5b488..bf77fdd 100644
+--- a/test/notes.test.mjs
++++ b/test/notes.test.mjs
+@@ -54,3 +54,13 @@ test('list pages through only the caller\'s notes', async () => {
+     assert.equal(p1.total, 5)
+   } finally { await app.close() }
+ })
++
++test('health answers without a token', async () => {
++  const app = await startApp()
++  try {
++    const r = await raw(app.base, 'GET', '/health', { token: null })
++    assert.equal(r.status, 200)
++    assert.deepEqual(r.body, { ok: true })
++    assert.equal((await raw(app.base, 'GET', '/notes', { token: null })).status, 401)
++  } finally { await app.close() }
++})

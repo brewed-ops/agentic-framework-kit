@@ -1,0 +1,27 @@
+From: bench <bench@example.com>
+Subject: [PATCH] fix: reference fix for update-endpoint
+
+---
+ src/server.mjs | 9 ++-------
+ 1 file changed, 2 insertions(+), 7 deletions(-)
+
+diff --git a/src/server.mjs b/src/server.mjs
+index 5fd662f..c5daf1c 100644
+--- a/src/server.mjs
++++ b/src/server.mjs
+@@ -52,13 +52,8 @@ export function createApp(store = createStore()) {
+       if (req.method === 'PATCH' && idMatch) {
+         const note = store.get(idMatch[1])
+         if (!note || note.owner !== user) return send(res, 404, { error: 'not found' })
+-        let raw = ''
+-        req.on('data', (chunk) => { raw += chunk })
+-        req.on('end', () => {
+-          const body = JSON.parse(raw)
+-          send(res, 200, store.update(note.id, body.text))
+-        })
+-        return
++        const body = await readJson(req)
++        return send(res, 200, store.update(note.id, body.text))
+       }
+       return send(res, 404, { error: 'not found' })
+     } catch (err) {

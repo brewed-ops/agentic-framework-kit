@@ -1,0 +1,45 @@
+{
+  "lens": "security",
+  "score": 1,
+  "summary": "The new DELETE /notes/:id has no ownership check, so bob can delete alice's note. I confirmed this with a live request: bob's DELETE returned 200 and alice's GET then returned 404. The only new test covers the owner's own delete and misses this. Opened src/server.mjs, src/store.mjs (store.remove existed before this change, unchanged), src/client.mjs, test/notes.test.mjs, test/helpers.mjs and AGENTS.md, grepped every use of `remove`, and ran npm test (all pass).",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/client.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:52-55",
+      "code": "      if (req.method === 'DELETE' && idMatch) {\n        if (!store.remove(idMatch[1])) return send(res, 404, { error: 'not found' })\n        return send(res, 200, { deleted: idMatch[1] })\n      }",
+      "issue": "IDOR / broken access control. The handler deletes any note by id and never checks note.owner against the authenticated user. Any valid token can delete any other user's notes, and ids are sequential and guessable. This breaks the house rule that a user only ever sees or changes their own notes. Confirmed live: bob's DELETE /notes/1 on alice's note returned 200 {deleted:'1'}, and alice's GET /notes/1 then returned 404.",
+      "fix": "Look up the note and check the owner before removing it, the same way the GET handler does: `const note = store.get(idMatch[1]); if (!note || note.owner !== user) return send(res, 404, { error: 'not found' }); store.remove(note.id); return send(res, 200, { deleted: note.id })`. Returning 404 rather than 403 avoids revealing that the note exists."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:58-65",
+      "code": "test('a user can delete their note', async () => {\n  const app = await startApp()\n  try {\n    const note = await app.alice.add('temp')\n    assert.deepEqual(await app.alice.remove(note.id), { deleted: note.id })\n    assert.equal((await raw(app.base, 'GET', `/notes/${note.id}`)).status, 404)\n  } finally { await app.close() }\n})",
+      "issue": "The house rule says every behavior change needs a test, and this test only covers the owner deleting their own note. Nothing tests the authorization boundary: a cross-user delete, or a DELETE with no token. That is why the IDOR above passes CI. There is also no test for deleting a missing id (404).",
+      "fix": "Add a test like 'another user cannot delete the note': alice adds a note, then `raw(app.base, 'DELETE', `/notes/${note.id}`, { token: 'token-bob' })` must return 404, and `app.alice.get(note.id)` must still return the note. Also assert that a DELETE with `{ token: null }` returns 401 and that a DELETE on a missing id returns 404."
+    },
+    {
+      "severity": "minor",
+      "file": "src/server.mjs:54",
+      "code": "        return send(res, 200, { deleted: idMatch[1] })",
+      "issue": "This is a new response contract, and it echoes the raw, still percent-encoded path segment instead of the stored note id. With today's numeric ids the two are identical. If ids ever contain characters that client.mjs encodes with encodeURIComponent, `deleted` would stop matching the id the client sent, and the client test's deepEqual would break.",
+      "fix": "Echo the id of the note that was actually deleted (`note.id`, from the ownership lookup in the first fix) rather than idMatch[1]."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:44-45",
+      "code": "        const body = await readJson(req)\n        return send(res, 201, store.create(user, body.text))",
+      "issue": "A POST body of `null` (valid JSON) makes `body` null, so `body.text` throws a TypeError and the server returns 500 instead of a 4xx. Confirmed live: status 500 with a TypeError logged. This breaks the rule that a bad request returns a 4xx JSON error. readJson also has no body-size cap, so a large upload can exhaust memory."
+    },
+    {
+      "file": "src/server.mjs:36",
+      "code": "      const idMatch = url.pathname.match(/^\\/notes\\/([^/]+)$/)",
+      "issue": "The id captured here is never decodeURIComponent'd, but client.mjs sends encodeURIComponent(id). With numeric ids nothing breaks today, but the client and server are asymmetric for any id that needs encoding."
+    }
+  ]
+}

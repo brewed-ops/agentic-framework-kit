@@ -1,0 +1,73 @@
+{
+  "lens": "quality",
+  "score": 1,
+  "summary": "Read src/server.mjs, src/store.mjs and test/notes.test.mjs in full, plus AGENTS.md, src/client.mjs and test/helpers.mjs. Grepped for callers of createStore, save and remove: only server.mjs:46, server.mjs:65 and the new test use them. npm test passes 7/7. A live probe with NOTES_FILE set to a path that cannot be written crashed the Node process (v24.12.0, unhandled ENOENT rejection) after one POST /notes, because store.save() is not awaited.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:46",
+      "code": "        store.save()",
+      "issue": "save() is async but it is not awaited and has no .catch. If writeFile rejects (bad path, EACCES, disk full, EBUSY on Windows), the rejection is never handled and Node >=15 kills the process. This was reproduced: one POST with an unwritable NOTES_FILE crashed the server. That breaks the house rule 'it never crashes the server'. The client also gets 201 before the note is saved, so a failed write still reports success and the note is lost on restart.",
+      "fix": "Use `await store.save()` inside the existing try, so a write failure goes to the catch and returns a 500 JSON error, not a crash. Send 201 only after the write succeeds. If the write fails, roll back the in-memory note (notes.delete(note.id)) so memory and disk stay in step."
+    },
+    {
+      "severity": "blocking",
+      "file": "src/store.mjs:38-41",
+      "code": "  async function save() {\n    if (!file) return\n    await writeFile(file, JSON.stringify([...notes.values()]))\n  }",
+      "issue": "Concurrent POSTs start overlapping writeFile calls on the same path, and nothing orders or serializes them. Two writes to the same file at once can interleave or truncate each other and leave invalid JSON. They can also finish out of order, so an older snapshot lands last and notes are lost. A corrupt file then makes createStore throw at the next boot (see the next finding), so the server cannot start. The risk is data loss or corruption in a common case: two users saving at the same time.",
+      "fix": "Serialize saves through a promise chain (`let pending = Promise.resolve(); function save(){ pending = pending.then(write, write); return pending }`). Write atomically: writeFile to `${file}.tmp`, then rename it over `file`."
+    },
+    {
+      "severity": "major",
+      "file": "src/store.mjs:10-12",
+      "code": "  if (file && existsSync(file)) {\n    for (const note of JSON.parse(readFileSync(file, 'utf8'))) notes.set(note.id, note)\n    nextId = Math.max(0, ...[...notes.keys()].map(Number)) + 1\n  }",
+      "issue": "The loader does not check the file at all. An empty or corrupt file (easy to get from the unserialized writes above) or a non-array JSON value throws at boot and the server never starts. A non-numeric id makes Math.max return NaN, so nextId becomes NaN and every new note gets id 'NaN' and overwrites the last one. Spreading every key into Math.max also throws RangeError once there are more notes than the engine's argument limit (tens of thousands or more).",
+      "fix": "Wrap the parse in try/catch and throw a clear startup error naming the file. Check Array.isArray. Compute nextId with a loop or reduce over the keys, skipping non-finite values."
+    },
+    {
+      "severity": "major",
+      "file": "test/notes.test.mjs:58-70",
+      "code": "test('notes survive a restart when a file is set', async () => {",
+      "issue": "Coverage gap for the behavior change. The only new test calls the store directly. Nothing covers the server change: POST /notes calling save, the 201 arriving only after the write, a failed write returning a 4xx/5xx JSON error instead of crashing, or concurrent POSTs leaving a valid file. test/helpers.mjs startApp() still calls createApp() with no file, so every HTTP test runs save() as a no-op and the new wiring in server.mjs is never exercised. The house rule says every behavior change needs a test.",
+      "fix": "Let startApp accept a store (for example startApp({ store })). Add HTTP tests that: (1) POST with a file set, then check that a new createStore({ file }) sees the note; (2) fire several POSTs with Promise.all and check that the file parses and holds all of them; (3) use an unwritable file path and check the response is a 500 JSON error and a follow-up GET still returns 200."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:40",
+      "code": "    await writeFile(file, JSON.stringify([...notes.values()]))",
+      "issue": "Performance: every POST serializes and rewrites the whole store. That is O(n) per write and O(n^2) across n creates, and it blocks the event loop on JSON.stringify as the file grows.",
+      "fix": "Fine at demo scale, but note the limit in a comment. Or debounce/coalesce saves so a burst of writes becomes one write, still awaited so the 201 means the note is saved."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:34-43",
+      "code": "  return { create, list, get, remove, save }",
+      "issue": "Persistence is left to the caller. remove() changes the notes but nothing saves it, so any future DELETE route that forgets save() quietly brings deleted notes back on restart. No route calls remove today, so the risk is latent.",
+      "fix": "Have create/remove save internally (and become async), or document on the store that every change must be followed by an awaited save()."
+    },
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:63",
+      "code": "  const file = join(mkdtempSync(join(tmpdir(), 'notes-')), 'notes.json')",
+      "issue": "The temp directory is never deleted, so each test run leaves a notes-* folder in the OS temp dir. The imports are also dynamic inside the test when the rest of the file uses static imports.",
+      "fix": "Hoist the imports to static imports at the top of the file. Wrap the body in try/finally with rmSync(dir, { recursive: true, force: true })."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:32",
+      "code": "      const user = TOKENS[(req.headers.authorization ?? '').replace(/^Bearer /, '')]",
+      "issue": "TOKENS is a plain object, so a bearer value such as 'constructor' or 'toString' resolves to an inherited Object.prototype function. That value is truthy and passes the auth check as a non-string 'user'. Use Object.hasOwn or a Map."
+    },
+    {
+      "file": "src/server.mjs:6",
+      "code": "const TOKENS = { 'token-alice': 'alice', 'token-bob': 'bob' }",
+      "issue": "Credentials are hardcoded in source. They should come from config or a database."
+    }
+  ]
+}

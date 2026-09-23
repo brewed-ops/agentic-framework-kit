@@ -1,0 +1,48 @@
+From: bench <bench@example.com>
+Subject: [PATCH] feat: cap pageSize at 100
+
+---
+ src/server.mjs      |  4 +++-
+ test/notes.test.mjs | 10 ++++++++++
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/src/server.mjs b/src/server.mjs
+index e090f3c..de22966 100644
+--- a/src/server.mjs
++++ b/src/server.mjs
+@@ -4,6 +4,8 @@ import { createStore, StoreError } from './store.mjs'
+ 
+ // token -> user. A real app would read these from a database.
+ const TOKENS = { 'token-alice': 'alice', 'token-bob': 'bob' }
++// Bigger pages are clamped, so one request cannot ask for the whole table.
++const MAX_PAGE_SIZE = 100
+ 
+ function send(res, status, body) {
+   res.writeHead(status, { 'content-type': 'application/json' })
+@@ -37,7 +39,7 @@ export function createApp(store = createStore()) {
+ 
+       if (req.method === 'GET' && url.pathname === '/notes') {
+         const page = positiveInt(url.searchParams.get('page'), 1)
+-        const pageSize = positiveInt(url.searchParams.get('pageSize'), 20)
++        const pageSize = Math.min(positiveInt(url.searchParams.get('pageSize'), 20), MAX_PAGE_SIZE)
+         return send(res, 200, store.list(user, { page, pageSize }))
+       }
+       if (req.method === 'POST' && url.pathname === '/notes') {
+diff --git a/test/notes.test.mjs b/test/notes.test.mjs
+index 0d5b488..ac3b6f1 100644
+--- a/test/notes.test.mjs
++++ b/test/notes.test.mjs
+@@ -54,3 +54,13 @@ test('list pages through only the caller\'s notes', async () => {
+     assert.equal(p1.total, 5)
+   } finally { await app.close() }
+ })
++
++test('page size is capped at 100', async () => {
++  const app = await startApp()
++  try {
++    for (let i = 1; i <= 3; i++) await app.alice.add(`n${i}`)
++    const r = await raw(app.base, 'GET', '/notes?pageSize=1000')
++    assert.equal(r.body.pageSize, 100)
++    assert.equal(r.body.items.length, 3)
++  } finally { await app.close() }
++})

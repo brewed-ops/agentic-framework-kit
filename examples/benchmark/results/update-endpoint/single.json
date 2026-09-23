@@ -1,0 +1,52 @@
+{
+  "lens": "all",
+  "score": 1,
+  "summary": "PATCH /notes/:id reads and parses its body in a raw 'end' callback that sits outside the handler's try/catch. Invalid JSON, an empty body or empty text throws an uncaught exception and takes the whole server down (reproduced for '{nope' and {text:''}). The owner check does hold: bob gets 404 and the note is unchanged. Tests cover only the happy path. Opened: src/server.mjs, src/store.mjs, test/notes.test.mjs, test/helpers.mjs, src/client.mjs, AGENTS.md, package.json; grepped for update/PATCH callers; ran npm test (7/7 pass).",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:55",
+      "code": "        let raw = ''\n        req.on('data', (chunk) => { raw += chunk })\n        req.on('end', () => {\n          const body = JSON.parse(raw)\n          send(res, 200, store.update(note.id, body.text))\n        })\n        return",
+      "issue": "The body is parsed in an event callback that runs after handle() has returned, so the surrounding try/catch never sees what it throws. JSON.parse on invalid JSON, or on an empty body (JSON.parse('')), throws SyntaxError. A body of 'null' throws TypeError on body.text. store.update throws StoreError for empty or too-long text. All of these are uncaught and crash the process. Reproduced: PATCH with '{nope' gives an uncaught SyntaxError, and PATCH with {\"text\":\"\"} gives an uncaught StoreError 'text is required'. This breaks the house rule 'A bad request returns a 4xx JSON error; it never crashes the server', and any authenticated user can use it to take the server down. There is also no req.on('error') handler, so the request hangs if the stream errors.",
+      "fix": "Use the existing helper inside the try block, the same way POST does: `const body = await readJson(req); return send(res, 200, store.update(note.id, body?.text))`. readJson already turns bad JSON into a 400 StoreError and an empty body into {}, and the outer catch turns StoreError into a 4xx JSON response."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:58",
+      "code": "test('a user can edit their note', async () => {",
+      "issue": "The new behavior has a happy-path test only. Nothing tests invalid or empty JSON returning 400 with the server still alive, empty or too-long text returning 400, or another user's PATCH returning 404 with the note unchanged. The crash above got past the suite because of these gaps. The house rule requires a test with every behavior change, and the rules this change touches (no crash on bad input, users can only change their own notes) are exactly the ones left untested.",
+      "fix": "Add tests: (1) PATCH with body '{nope' returns 400, and a follow-up GET /notes returns 200 (server still up). (2) PATCH with {text:''} and with 'x'.repeat(501) returns 400. (3) bob's PATCH on alice's note (token 'token-bob') returns 404, and alice.get(id).text is still the original."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:28",
+      "code": "    const note = notes.get(id)\n    if (typeof text !== 'string' || !text.trim()) throw new StoreError(400, 'text is required')\n    if (text.length > MAX_TEXT) throw new StoreError(400, `text is longer than ${MAX_TEXT} characters`)\n    note.text = text",
+      "issue": "update() assumes the id exists. An unknown id gives undefined, and `note.text = text` throws TypeError, which becomes a 500 instead of a 404. The only caller checks existence first, but it reads the note before the body arrives, so a delete between the check and the write would hit this. The validation rules are also copied from create(), so the two can drift apart.",
+      "fix": "Add `if (!note) throw new StoreError(404, 'not found')` before the write. Move the two text checks into a shared validateText(text) that both create and update call."
+    },
+    {
+      "severity": "minor",
+      "file": "src/server.mjs:52",
+      "code": "      if (req.method === 'PATCH' && idMatch) {",
+      "issue": "The response shapes are a contract that src/client.mjs is supposed to track ('keep it in step with server.mjs'). The new endpoint has no client method, so outside tools that use the client cannot edit notes. The new test also goes through raw() instead of the client.",
+      "fix": "Add `update: (id, text) => call('PATCH', `/notes/${encodeURIComponent(id)}`, { text })` to createClient and use app.alice.update in the test. Or say explicitly that PATCH is raw-only for now."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/store.mjs:17",
+      "code": "    const mine = [...notes.values()].filter((n) => n.owner === owner)",
+      "issue": "list() scans every note from every user on each page request (O(total notes) per page). The client's all() pages through at 50 per call, so walking the full list costs O(n^2 / 50). Not introduced by this diff."
+    },
+    {
+      "file": "src/server.mjs:50",
+      "code": "        return send(res, 200, note)",
+      "issue": "The handlers return the live stored object. The owner field is exposed in responses, and any later in-process change to a response object would change the stored note. Not introduced by this diff."
+    }
+  ]
+}

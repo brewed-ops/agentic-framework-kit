@@ -1,0 +1,38 @@
+{
+  "lens": "quality",
+  "score": 4,
+  "summary": "Ships apart from two small gaps: since is never tested together with page/pageSize, and the numeric-id assumption is undocumented. F1-F3 are fixed at the root. npm test passes 8/8 and lint is clean. Opened src/server.mjs, src/store.mjs, test/notes.test.mjs, test/helpers.mjs, src/client.mjs, AGENTS.md and package.json, and grepped for since/.list( callers: store.list's only caller is server.mjs, and client.mjs never sends since, so no caller is broken and the response shape is unchanged.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:58",
+      "code": "test('since returns only the newer notes', async () => {",
+      "issue": "F4 is still open. No test combines since with page/pageSize. The code filters by since before slicing the page, and total counts only the filtered notes, but no test checks either. A later change that slices first and filters second would pass every current test. Nothing guards the documented paging contract (items/total/page/pageSize) when since is set.",
+      "fix": "Add a test: alice adds a1..a5, bob adds b1, then GET /notes?since=<a1.id>&page=2&pageSize=2. Assert items are ['a4','a5'] and total is 4."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:16",
+      "code": "  // page is 1-based. since: only notes created after the note with that id.",
+      "issue": "F5 is still open. since assumes ids are numeric and increase with creation time (Number(n.id) > since), but outside callers only see string ids. The contract is not documented in AGENTS.md, and neither the client nor a README mentions since. If the id scheme ever changes (UUIDs, for example), Number(n.id) becomes NaN, NaN > since is false, and a since query silently returns nothing.",
+      "fix": "Document the since contract (a numeric note id, exclusive, needs sequential numeric ids) in AGENTS.md or a README, or next to the /notes route in server.mjs. Optionally add a since option to client.mjs so it stays in step with the server."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:24",
+      "code": "function positiveInt(value, fallback) {",
+      "issue": "A malformed page or pageSize (for example page=abc or pageSize=-5) silently falls back to the default instead of returning a 4xx. That is inconsistent with the new since validation, which returns 400. There is also no upper bound on pageSize."
+    },
+    {
+      "file": "src/client.mjs:18",
+      "code": "    async all() {",
+      "issue": "all() makes one sequential request per page (a round trip for every 50 notes). This is untouched by the diff."
+    }
+  ]
+}

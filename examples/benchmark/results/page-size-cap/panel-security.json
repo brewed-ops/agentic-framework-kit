@@ -1,0 +1,37 @@
+{
+  "lens": "security",
+  "score": 4,
+  "summary": "The page-size clamp is correct and safe: the response echoes the clamped pageSize, and src/client.mjs all() still pages correctly because it asks for 50 and stops on total. I read src/server.mjs, test/notes.test.mjs, test/helpers.mjs, src/store.mjs, src/client.mjs and AGENTS.md in full, grepped for pageSize and MAX_PAGE_SIZE, and ran npm test (7 of 7 pass). Two minor gaps: the new test never proves results are cut off at 100, and outside callers get no signal that their larger request was reduced. Separately, I confirmed an existing way past the 401 check by running it.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:61",
+      "code": "    for (let i = 1; i <= 3; i++) await app.alice.add(`n${i}`)\n    const r = await raw(app.base, 'GET', '/notes?pageSize=1000')\n    assert.equal(r.body.pageSize, 100)\n    assert.equal(r.body.items.length, 3)",
+      "issue": "With only 3 notes, the test checks that the echoed pageSize is 100. It never shows that the number of items returned is actually limited to 100, which is the point of the cap. If a later change clamped only the echoed field and passed the raw size to the store, this test would still pass.",
+      "fix": "Add 101 or more notes for alice, request pageSize=1000, and assert items.length === 100 and total === 101. Keep the pageSize === 100 assertion. Also check that page=2 at the capped size returns the remaining note."
+    },
+    {
+      "severity": "minor",
+      "file": "src/server.mjs:42",
+      "code": "        const pageSize = Math.min(positiveInt(url.searchParams.get('pageSize'), 20), MAX_PAGE_SIZE)",
+      "issue": "Contract change: before this diff, a pageSize above 100 returned every item in one response. Now it silently returns at most 100. src/client.mjs is unaffected because it uses 50 and loops on total. An outside caller that reads one big page and never pages again would silently lose rows. The pageSize echoed in the response is its only clue, and neither AGENTS.md nor the client documents that.",
+      "fix": "Keep the clamp, because it is the safer behavior, but document the 100 maximum next to the response-shape contract (AGENTS.md or a comment in client.mjs). An alternative is to return a 400 JSON error when pageSize > MAX_PAGE_SIZE, so callers find out loudly. Pick one behavior and state it."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:34",
+      "code": "      const user = TOKENS[(req.headers.authorization ?? '').replace(/^Bearer /, '')]",
+      "issue": "Authentication bypass. TOKENS is a plain object, so a token such as 'constructor', '__proto__' or 'toString' looks up a built-in Object property (a function or the object prototype) that is truthy, and the 401 check passes. Confirmed with a local test script: GET /notes with 'Bearer constructor' returned 200, and POST /notes with that token returned 201 and created a note owned by the Object constructor function. Fix: use Object.hasOwn(TOKENS, t) or a Map (or Object.create(null)), and check that the result is a string."
+    },
+    {
+      "file": "src/server.mjs:26",
+      "code": "function positiveInt(value, fallback) {\n  const n = Number(value)\n  return Number.isInteger(n) && n > 0 ? n : fallback\n}",
+      "issue": "'page' has no upper bound. Values such as 1e21 are accepted and echoed back as page in the response. It does no harm today (slice returns an empty list), but with pageSize now capped, 'page' is the remaining input with no limit."
+    }
+  ]
+}

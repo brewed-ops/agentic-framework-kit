@@ -1,0 +1,52 @@
+{
+  "lens": "quality",
+  "score": 1,
+  "summary": "PATCH /notes/:id runs JSON.parse and store.update inside a req 'end' callback, outside the handler's try/catch. I ran it: invalid JSON, empty text and a `null` body each raised an uncaught exception, which crashes the process. Tests pass 7/7 but only the happy path is covered. Files read: src/server.mjs, src/store.mjs, test/notes.test.mjs, test/helpers.mjs, src/client.mjs, package.json, AGENTS.md. Grepped for update/PATCH callers: only server.mjs and the new test use them.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "src/server.mjs:56-60",
+      "code": "        req.on('data', (chunk) => { raw += chunk })\n        req.on('end', () => {\n          const body = JSON.parse(raw)\n          send(res, 200, store.update(note.id, body.text))\n        })\n        return",
+      "issue": "Breaks the house rule that a bad request returns a 4xx JSON error and never crashes the server. The body is parsed in an event callback after the handler has already returned, so the surrounding try/catch never sees errors thrown there. I reproduced three uncaught exceptions that kill the process: '{nope' gives a SyntaxError, '{\"text\":\"\"}' or text over 500 characters gives a StoreError, and 'null' gives a TypeError on body.text. An empty body does the same because JSON.parse('') throws. There is also no req 'error' listener. This also duplicates the existing readJson helper instead of using it.",
+      "fix": "Use the existing helper like POST does: `const body = await readJson(req); return send(res, 200, store.update(note.id, body?.text))`. Errors then reach the catch block, which already maps StoreError to 400 and invalid JSON to 400. Consider making readJson reject a non-object body (such as null) with a 400."
+    },
+    {
+      "severity": "blocking",
+      "file": "test/notes.test.mjs:58-66",
+      "code": "test('a user can edit their note', async () => {",
+      "issue": "The new behavior is tested only on the happy path. Nothing tests the auth and ownership rule for PATCH (bob patching alice's note should get 404 and leave the note unchanged; a request with no token should get 401). Nothing tests the no-crash rule for PATCH (invalid JSON, empty text or text over 500 characters should get 400, and the server should still answer a follow-up request). These missing tests are why the crash above passes CI.",
+      "fix": "Add tests modeled on the POST ones. (1) Bob sends PATCH to /notes/<alice id> with token-bob and gets 404; alice's text is unchanged. (2) PATCH with no token gets 401. (3) PATCH with '{nope', with {text:''} and with {text:'x'.repeat(501)} each gets 400, and then GET /notes still returns 200."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:27-33",
+      "code": "    const note = notes.get(id)\n    if (typeof text !== 'string' || !text.trim()) throw new StoreError(400, 'text is required')\n    if (text.length > MAX_TEXT) throw new StoreError(400, `text is longer than ${MAX_TEXT} characters`)\n    note.text = text",
+      "issue": "update() assumes the id exists. With an unknown id, note is undefined and `note.text = text` throws a TypeError (500) instead of a StoreError. The only current caller checks first, but the exported store API is not defensive like get() is.",
+      "fix": "Add `if (!note) throw new StoreError(404, 'not found')` after the lookup."
+    },
+    {
+      "severity": "minor",
+      "file": "src/server.mjs:52",
+      "code": "      if (req.method === 'PATCH' && idMatch) {",
+      "issue": "The client contract drifts. src/client.mjs says 'keep it in step with server.mjs' but has no update method, so importers cannot reach the new endpoint and the test has to call raw() instead of the client.",
+      "fix": "Add `update: (id, text) => call('PATCH', `/notes/${encodeURIComponent(id)}`, { text })` to src/client.mjs and use app.alice.update in the test."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:13-22",
+      "code": "      try { resolve(raw ? JSON.parse(raw) : {}) } catch { reject(new StoreError(400, 'body is not valid JSON')) }",
+      "issue": "readJson resolves a JSON `null` body as null. POST /notes then reads body.text on null and returns a 500 instead of a 400. The request is caught, so the server does not crash."
+    },
+    {
+      "file": "src/store.mjs:18-21",
+      "code": "    const mine = [...notes.values()].filter((n) => n.owner === owner)",
+      "issue": "list() scans every note from every user on each page request, so walking all pages (client.all) is O(n^2) overall. Fine for an in-memory demo, but it will not scale."
+    }
+  ]
+}

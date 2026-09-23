@@ -1,0 +1,33 @@
+{
+  "lens": "correctness",
+  "score": 4,
+  "summary": "I read src/server.mjs, src/store.mjs and test/notes.test.mjs in full, plus src/client.mjs, test/helpers.mjs and AGENTS.md. store.list has one caller (server.mjs:44), and client.mjs never sends since, so no caller is broken. npm test passes 8/8. F1, F2 and F3 are fixed at the root. F4 and F5 are still open and minor.",
+  "coverage": {
+    "src/server.mjs": "reviewed",
+    "src/store.mjs": "reviewed",
+    "test/notes.test.mjs": "reviewed"
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "test/notes.test.mjs:58",
+      "code": "test('since returns only the newer notes', async () => {",
+      "issue": "F4 is still open. No test combines since with page/pageSize. The filter runs before the slice, so total counts only the filtered notes and pages step through the filtered list. That behavior is part of the response-shape contract but nothing tests it. A regression that paged first and filtered second, or returned the unfiltered total, would still pass every test.",
+      "fix": "Add a test: alice adds a1..a5 and bob adds one note in between. Call GET /notes?since=<a1.id>&page=2&pageSize=2 and assert items are ['a4','a5'] and total is 4."
+    },
+    {
+      "severity": "minor",
+      "file": "src/store.mjs:16",
+      "code": "  // page is 1-based. since: only notes created after the note with that id.",
+      "issue": "F5 is still open. since compares Number(n.id) > since, so it depends on ids being sequential numeric strings. Only an internal comment says so. Nothing tells outside callers (no README, nothing in client.mjs) that since takes a note id rather than a timestamp, or that it is a strict greater-than cursor. If the id scheme ever changes, for example to UUIDs, Number(n.id) becomes NaN and since quietly returns nothing.",
+      "fix": "Document since for API callers (a README or AGENTS.md line: 'since=<note id>, returns notes with a higher id, exclusive'). Keep the store comment, and note there that it assumes sequential numeric ids."
+    }
+  ],
+  "pre_existing": [
+    {
+      "file": "src/server.mjs:39",
+      "code": "        const page = positiveInt(url.searchParams.get('page'), 1)",
+      "issue": "A malformed page or pageSize (abc, -1, 1.5) quietly falls back to the default instead of returning 400. That differs from the new since validation, but this diff did not change it."
+    }
+  ]
+}

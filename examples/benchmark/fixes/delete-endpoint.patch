@@ -1,0 +1,22 @@
+From: bench <bench@example.com>
+Subject: [PATCH] fix: reference fix for delete-endpoint
+
+---
+ src/server.mjs | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/server.mjs b/src/server.mjs
+index 48311c9..e4a9d00 100644
+--- a/src/server.mjs
++++ b/src/server.mjs
+@@ -50,7 +50,9 @@ export function createApp(store = createStore()) {
+         return send(res, 200, note)
+       }
+       if (req.method === 'DELETE' && idMatch) {
+-        if (!store.remove(idMatch[1])) return send(res, 404, { error: 'not found' })
++        const note = store.get(idMatch[1])
++        if (!note || note.owner !== user) return send(res, 404, { error: 'not found' })
++        store.remove(note.id)
+         return send(res, 200, { deleted: idMatch[1] })
+       }
+       return send(res, 404, { error: 'not found' })

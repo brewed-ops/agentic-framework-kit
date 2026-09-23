@@ -1,0 +1,19 @@
+From: bench <bench@example.com>
+Subject: [PATCH] fix: reference fix for validation-refactor
+
+---
+ src/store.mjs | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/store.mjs b/src/store.mjs
+index b31a49d..f304f2c 100644
+--- a/src/store.mjs
++++ b/src/store.mjs
+@@ -3,6 +3,7 @@ const MAX_TEXT = 500
+ 
+ function validateText(text) {
+   if (typeof text !== 'string' || !text.trim()) throw new StoreError(400, 'text is required')
++  if (text.length > MAX_TEXT) throw new StoreError(400, `text is longer than ${MAX_TEXT} characters`)
+ }
+ 
+ export function createStore() {
