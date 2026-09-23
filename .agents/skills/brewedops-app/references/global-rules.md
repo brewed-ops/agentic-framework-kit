@@ -36,6 +36,9 @@ Where this file goes depends on your tool (the installer can place it for you):
   GitHub: `<user>/<repo>`. Cite the file you read. Never guess method names or options.
 
 ## After each small piece (the build loop)
+0. **Check first**: before the code, write a test (or for UI, a browser check) that FAILS
+   because the change is missing. Build until it passes. Never report "done" while a test,
+   the lint or the build is red.
 1. **code-structure** - keep ONE version of each operational step; extract repeats into a
    service layer. Actions own the rules, services own the mechanics.
 2. **Clarity pass** on the code just changed - same behavior, fewer lines, no nested ternaries,

@@ -64,8 +64,9 @@ https://github.com/michaelshimeles/skills.
 
 - **New project:** open an empty folder and say "brewedops app". The skill checks the pieces,
   asks what the app is for, recommends a stack, sets up CI, and writes the project's AGENTS.md.
-- **Every small piece of work:** read real package source with opensrc -> build -> code-structure
-  -> clarity pass -> scanloop -> greploop to 5/5 -> commit, push, CI green.
+- **Every small piece of work:** read real package source with opensrc -> write a failing
+  test or check -> build until it passes -> code-structure -> clarity pass -> scanloop ->
+  greploop to 5/5 -> commit, push, CI green.
 - **Deploying:** only when the user says "deploy" for that change, and only through the `ship`
   skill: preflight check, rollback prepared, safe upload order, prove it is live.
 

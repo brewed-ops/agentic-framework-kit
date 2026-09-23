@@ -1,7 +1,8 @@
 # Project AGENTS.md template
 
 Write everything below the cut line to the new project's root as `AGENTS.md` in Phase 3 and fill
-every `{{PLACEHOLDER}}` (unknown = `TBD`, never invented). Keep it to about a page. Its job: every
+every `{{PLACEHOLDER}}` (unknown = `TBD`, never invented). `{{STRUCTURE_RULES}}` and
+`{{TEST_COMMAND}}` come from the chosen stack's row in `tech-stacks.md` ("Structure per stack"). Keep it to about a page. Its job: every
 future session in this folder, in any AI tool, reaches for opensrc before any package, runs the
 build loop after each piece, and never deploys outside the ship gate. Do not trim those blocks.
 
@@ -16,17 +17,17 @@ build loop after each piece, and never deploys outside the ship gate. Do not tri
 {{STACK_NOTES}}
 
 ## Structure
-- Feature folders: `src/features/<domain>/`
-- API and data logic in `lib/` - never in components
-- Components render. Hooks orchestrate. Lib functions do the work.
-- Files `kebab-case` | Components `PascalCase` | Functions `camelCase`
+{{STRUCTURE_RULES}}
 
 ## Real package code (opensrc) - always, before using any dependency
 - Run `opensrc path <package>` and read the real source before writing code that uses it.
   npm `opensrc path <name>` | Python `pypi:<name>` | Rust `crates:<name>` | GitHub `<user>/<repo>`
 - Cite the file you read. Never guess method names, options or types, even for familiar packages.
 
-## The build loop - after every small piece
+## The build loop - for every small piece
+0. **Check first**: write a test (for UI, a browser check) that FAILS because the change is
+   missing; build until it passes. Test, lint and build must all be green before "done".
+   Test command: {{TEST_COMMAND}}
 1. **code-structure skill**: one version of each operational step; repeats go into a service
    layer. Actions own the rules, services own the mechanics.
 2. **Clarity pass** on the changed code only: same behavior, fewer lines, no nested ternaries,

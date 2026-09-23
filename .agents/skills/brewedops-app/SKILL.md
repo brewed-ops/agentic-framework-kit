@@ -22,8 +22,11 @@ search and fix; the user decides what to build and what ships.
 | ship | CI on every push; deploys only on the user's go, through a checklist | skill |
 
 **The build loop**, one small piece at a time: decide one small thing -> read real source with
-opensrc -> build it (you type, the user steers) -> code-structure tidies -> clarity pass ->
-scanloop -> greploop to 5/5 -> commit, push, CI green -> next piece. Nothing goes live until the
+opensrc -> **write a check that fails first** (a test; for UI, a browser script or screenshot that
+shows the change missing) -> build until it passes (you type, the user steers) -> code-structure
+tidies -> clarity pass -> scanloop -> greploop to 5/5 -> commit, push, CI green -> next piece.
+Writing the check first proves it can fail; a test written after the code often only proves
+the code does what the code does. Nothing goes live until the
 user says "deploy", and then it goes through the `ship` skill.
 
 **The clarity pass** (on the code just changed, after code-structure): same behavior, fewer
@@ -104,7 +107,8 @@ Never default to React/Vite.
 Say:
 
 > Framework wired. We build one small piece at a time: you name it -> I read the real source
-> with opensrc -> build it while you steer -> code-structure tidies -> clarity pass -> scanloop
+> with opensrc -> write a failing check -> build until it passes while you steer ->
+> code-structure tidies -> clarity pass -> scanloop
 > scans -> greploop reviews to 5/5 -> commit, push, CI green. Nothing goes live until you say
 > "deploy". What is the first small thing?
 
