@@ -75,4 +75,7 @@ https://github.com/michaelshimeles/skills.
   `name` (matches the folder, lowercase-hyphenated) and `description` (under 1024 characters) in
   the frontmatter. No tool-specific fields.
 - Run `node scripts/check-kit.mjs` before committing; CI runs it on every push.
+- New shell scripts need the executable bit IN GIT (`git update-index --chmod=+x <file>`;
+  a plain `chmod` on Windows is not recorded). `.gitattributes` keeps every file LF so bash
+  scripts still run after a Windows checkout.
 - Keep instructions tool-neutral. When a step differs per tool, give each tool's line.
