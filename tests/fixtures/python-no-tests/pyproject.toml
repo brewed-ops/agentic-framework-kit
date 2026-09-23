@@ -1,0 +1,9 @@
+[project]
+name = "fixture-python-no-tests"
+version = "0.1.0"
+description = "Negative fixture: lints clean but has no tests. ship/assets/ci-python.yml must fail it (pytest exit 5)."
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8"]

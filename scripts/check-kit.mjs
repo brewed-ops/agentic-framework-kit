@@ -21,7 +21,8 @@ const fail = (file, msg) => errors.push(`${relative(ROOT, file)}: ${msg}`)
 
 function walk(dir) {
   return readdirSync(dir).flatMap((n) => {
-    if (n === '.git' || n === 'node_modules') return []
+    // Build output and tool caches are gitignored and never ship; a local fixture run writes paths into them.
+    if (['.git', 'node_modules', 'target', '.venv', 'dist', '__pycache__', '.pytest_cache', '.ruff_cache', '.scanloop', '.greploop'].includes(n)) return []
     const p = join(dir, n)
     return statSync(p).isDirectory() ? walk(p) : [p]
   })

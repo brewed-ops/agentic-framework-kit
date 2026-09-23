@@ -1,0 +1,11 @@
+{
+  "name": "fixture-node-no-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Negative fixture: lints and builds, but has no test script. ship/assets/ci.yml must fail it.",
+  "scripts": {
+    "lint": "node --check sum.mjs && node --check build.mjs",
+    "build": "node build.mjs",
+    "postbuild": "node ../../../.agents/skills/ship/assets/write-version.mjs dist"
+  }
+}

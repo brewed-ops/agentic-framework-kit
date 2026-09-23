@@ -1,0 +1,12 @@
+{
+  "name": "fixture-node",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Smallest Node project that ship/assets/ci.yml must pass on. Zero dependencies.",
+  "scripts": {
+    "lint": "node --check sum.mjs && node --check sum.test.mjs && node --check build.mjs",
+    "test": "node --test sum.test.mjs",
+    "build": "node build.mjs",
+    "postbuild": "node ../../../.agents/skills/ship/assets/write-version.mjs dist"
+  }
+}

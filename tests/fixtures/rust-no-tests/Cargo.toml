@@ -1,0 +1,8 @@
+[package]
+name = "fixture-rust-no-tests"
+version = "0.1.0"
+edition = "2021"
+description = "Negative fixture: formats and lints clean but has no tests. ship/assets/ci-rust.yml must fail it."
+publish = false
+
+[dependencies]

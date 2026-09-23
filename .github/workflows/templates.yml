@@ -1,0 +1,129 @@
+name: Test CI templates
+
+# Proves each CI template in .agents/skills/ship/assets/ on a real project, on a real Linux
+# runner. For every language: a positive fixture must pass every `run:` step of the template, and
+# a negative fixture (no tests) must fail at the test step. scripts/run-template.mjs reads the
+# template at run time, so the commands tested are always the ones the template ships.
+#
+# The setup steps (`uses:`) cannot be read from the template - each job below hard-codes them.
+# IF A TEMPLATE'S SETUP STEP CHANGES (new action, new version or SHA), THIS FILE MUST CHANGE WITH
+# IT. The first step of every job is a drift detector: it fails when the template's `uses:` refs
+# and this job's `refs` list differ in either direction.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - .agents/skills/ship/assets/**
+      - tests/fixtures/**
+      - scripts/run-template.mjs
+      - .github/workflows/templates.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: templates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TEMPLATE: .agents/skills/ship/assets/ci.yml
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup steps match the template
+        env:
+          refs: actions/checkout@v7 actions/setup-node@v7
+        run: |
+          want="$(tr ' ' '\n' <<<"$refs" | sort -u)"
+          have="$(grep -oE '^\s*-?\s*uses:\s*[^[:space:]#]+' "$TEMPLATE" | sed -E 's/.*uses:\s*//' | sort -u)"
+          [ "$want" = "$have" ] || { echo "::error::$TEMPLATE uses: refs changed - update this job to match."; diff <(echo "$want") <(echo "$have"); exit 1; }
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: tests/fixtures/node/.nvmrc
+          cache: npm
+          cache-dependency-path: tests/fixtures/node*/package-lock.json
+      - name: Positive fixture passes
+        run: node scripts/run-template.mjs "$TEMPLATE" tests/fixtures/node
+      - name: Fixture without tests fails at the test step
+        run: node scripts/run-template.mjs "$TEMPLATE" tests/fixtures/node-no-tests --expect-fail
+
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TEMPLATE: .agents/skills/ship/assets/ci-python.yml
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup steps match the template
+        env:
+          refs: actions/checkout@v7 astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        run: |
+          want="$(tr ' ' '\n' <<<"$refs" | sort -u)"
+          have="$(grep -oE '^\s*-?\s*uses:\s*[^[:space:]#]+' "$TEMPLATE" | sed -E 's/.*uses:\s*//' | sort -u)"
+          [ "$want" = "$have" ] || { echo "::error::$TEMPLATE uses: refs changed - update this job to match."; diff <(echo "$want") <(echo "$have"); exit 1; }
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - name: Positive fixture passes
+        run: node scripts/run-template.mjs "$TEMPLATE" tests/fixtures/python
+      - name: Fixture without tests fails at the test step
+        run: node scripts/run-template.mjs "$TEMPLATE" tests/fixtures/python-no-tests --expect-fail
+
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TEMPLATE: .agents/skills/ship/assets/ci-go.yml
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup steps match the template
+        env:
+          refs: actions/checkout@v7 actions/setup-go@v7
+        run: |
+          want="$(tr ' ' '\n' <<<"$refs" | sort -u)"
+          have="$(grep -oE '^\s*-?\s*uses:\s*[^[:space:]#]+' "$TEMPLATE" | sed -E 's/.*uses:\s*//' | sort -u)"
+          [ "$want" = "$have" ] || { echo "::error::$TEMPLATE uses: refs changed - update this job to match."; diff <(echo "$want") <(echo "$have"); exit 1; }
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: tests/fixtures/go/go.mod
+      - name: Positive fixture passes
+        run: node scripts/run-template.mjs "$TEMPLATE" tests/fixtures/go
+      - name: Fixture without tests fails at the test step
+        run: node scripts/run-template.mjs "$TEMPLATE" tests/fixtures/go-no-tests --expect-fail
+
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TEMPLATE: .agents/skills/ship/assets/ci-rust.yml
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup steps match the template
+        env:
+          refs: >-
+            actions/checkout@v7
+            dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+            Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        run: |
+          want="$(tr ' ' '\n' <<<"$refs" | sort -u)"
+          have="$(grep -oE '^\s*-?\s*uses:\s*[^[:space:]#]+' "$TEMPLATE" | sed -E 's/.*uses:\s*//' | sort -u)"
+          [ "$want" = "$have" ] || { echo "::error::$TEMPLATE uses: refs changed - update this job to match."; diff <(echo "$want") <(echo "$have"); exit 1; }
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            tests/fixtures/rust
+            tests/fixtures/rust-no-tests
+      - name: Positive fixture passes
+        run: node scripts/run-template.mjs "$TEMPLATE" tests/fixtures/rust
+      - name: Fixture without tests fails at the test step
+        run: node scripts/run-template.mjs "$TEMPLATE" tests/fixtures/rust-no-tests --expect-fail

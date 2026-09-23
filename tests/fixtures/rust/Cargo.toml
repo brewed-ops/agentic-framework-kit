@@ -1,0 +1,8 @@
+[package]
+name = "fixture-rust"
+version = "0.1.0"
+edition = "2021"
+description = "Smallest crate that ship/assets/ci-rust.yml must pass on."
+publish = false
+
+[dependencies]
